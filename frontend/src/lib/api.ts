@@ -39,8 +39,11 @@ export class ApiError extends Error {
   }
 }
 
+// Relative to Vite's configured `base` (e.g. "/paragony/") rather than a hardcoded "/api" —
+// this app is reverse-proxied under a path prefix by investing-app's shared nginx, not served
+// from the domain root. See vite.config.ts's `base` and infra/nginx path-prefix notes.
 export const apiClient: AxiosInstance = axios.create({
-  baseURL: "/api",
+  baseURL: `${import.meta.env.BASE_URL}api`,
 });
 
 apiClient.interceptors.response.use(

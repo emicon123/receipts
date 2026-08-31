@@ -176,3 +176,9 @@ as a blocker rather than silently picking a side.
 - **File-input camera capture** works without any special permissions prompt on iOS/Android; a
   raw `getUserMedia` approach would require explicit camera permission and more code for no
   benefit here.
+- **`vite.config.ts`'s `base: "/paragony/"` (production only) is load-bearing, not incidental** —
+  this app is served under that path prefix by investing-app's shared nginx (see CLAUDE.md §
+  Deployment). Don't "simplify" it back to `/`; that breaks every asset URL, the PWA manifest,
+  and client-side routing in production. `apiClient`'s baseURL (`src/lib/api.ts`) and
+  `BrowserRouter`'s `basename` (`main.tsx`) both derive from `import.meta.env.BASE_URL` — keep
+  deriving from that single source rather than hardcoding the prefix a second place.

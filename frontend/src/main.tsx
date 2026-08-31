@@ -24,7 +24,9 @@ if (!rootElement) {
 createRoot(rootElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      {/* Reverse-proxied under /paragony/ in production (see vite.config.ts's `base`);
+          import.meta.env.BASE_URL tracks the same value so dev (base "/") is unaffected. */}
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
         <App />
       </BrowserRouter>
     </QueryClientProvider>

@@ -144,6 +144,17 @@ location /api/ {
 }
 ```
 
+**This nginx is not the public entry point.** It's reached via `host.docker.internal:${NGINX_PORT}`
+from a `/paragony/` location block on **investing-app's** nginx (a different repo/compose
+project) — see CLAUDE.md § Deployment for the full cross-repo picture. Consequences for you:
+- Keep this container's nginx bound to `0.0.0.0` (never `127.0.0.1`) — investing-app's nginx
+  container reaches it via the Docker bridge gateway, which can't cross a loopback-only bind.
+- This config itself needs **no** knowledge of the `/paragony/` prefix — investing-app's nginx
+  strips it before forwarding, so every request this config sees is already normal root-relative.
+  Don't add prefix-handling here; that would double-strip and break routing.
+- If you ever change `NGINX_PORT` from the default `8080`/published `8090`, investing-app's
+  `nginx.conf` needs a matching update — flag it, don't just change it on this side silently.
+
 ## Dockerfile patterns
 
 Reuse investing-app's multi-stage patterns directly — Maven backend build → `eclipse-temurin:25-jre-alpine`

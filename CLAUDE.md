@@ -189,12 +189,41 @@ receipts/
 
 ## Rebuilding and restarting the app
 
-(Once `infra/compose.yml` exists — see the DevOps agent for the full setup.)
-
 ```bash
 cd infra
-docker compose build backend && docker compose up -d backend   # after Java changes
-docker compose build nginx && docker compose up -d nginx       # after frontend changes
-docker compose up -d --build                                   # restart everything
-docker logs -f receipts-backend-1                               # tail backend logs
+docker compose --env-file ../.env build backend && docker compose --env-file ../.env up -d backend   # after Java changes
+docker compose --env-file ../.env build nginx && docker compose --env-file ../.env up -d nginx       # after frontend changes
+docker compose --env-file ../.env up -d --build                                                       # restart everything
+docker logs -f receipts-backend-1                                                                     # tail backend logs
 ```
+
+## Deployment: served under investing-app's shared nginx at `/paragony/`
+
+This app is not reached directly by end users — the canonical URL is
+`http://<tailscale-hostname>/paragony/`, proxied by **investing-app's** nginx (a *different*
+repo/compose project), the same way it already fronts sibling apps at `/leszek/` and `/magda/`,
+and a host-process app at `/ticket/`. Receipts is architecturally like the `/ticket/` case (a
+separately-deployed app, not a service inside investing-app's own compose network) rather than
+the `/leszek/`/`/magda/` case (those are nested sibling services on investing-app's own network,
+reached by container name) — so the routing goes through `host.docker.internal`, reaching
+receipts' own already-published nginx on port 8090 (see `infra/compose.yml`'s `NGINX_PORT`),
+which then does its normal internal `/api/` proxy to the receipts backend unchanged. One
+location block on investing-app's side handles both static assets and `/api/` calls — no need
+for a split `/paragony/api/` block the way `/leszek/api/` and `/magda/api/` have one, since
+receipts' own nginx already does that split internally once the prefix is stripped.
+
+**This creates two real, load-bearing consequences, both already applied:**
+1. **`frontend/vite.config.ts`'s `base` is hardcoded to `/paragony/`** for production builds
+   (`npm run dev` stays at `/`, unaffected) — every asset URL, the PWA manifest's
+   `start_url`/`scope`, and the React Router `basename` (`main.tsx`) all derive from this. If the
+   path prefix ever changes, update it in exactly one place (`vite.config.ts`'s `base`) and
+   rebuild; everything else derives from `import.meta.env.BASE_URL`.
+2. **`investing-app/infra/nginx/nginx.conf` has a `/paragony/` location block** (not part of
+   this repo — cross-repo coupling, documented here so it isn't a mystery later). Its config is
+   baked into the image at build time (not bind-mounted), so a change there needs
+   `docker compose build nginx && docker compose up -d nginx` run **inside investing-app's own
+   `infra/`**, not this repo's. Receipts' own `infra/compose.yml`'s nginx (port 8090, bound to
+   `0.0.0.0` — required so the docker-bridge-reachable `host.docker.internal` route from
+   investing-app's nginx container works, same reason `/ticket/`'s host process is also bound
+   `0.0.0.0`) stays running as the proxy target; it is no longer meant for direct end-user
+   access, though nothing prevents it.
