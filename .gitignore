@@ -1,0 +1,41 @@
+# ── Java / Maven ──────────────────────────────────────────────────────────────
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# ── Eclipse / IntelliJ IDEA ───────────────────────────────────────────────────
+.classpath
+.factorypath
+.project
+.settings/
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# ── Node / npm ────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+dist-ssr/
+*.tsbuildinfo
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+*.code-workspace
+
+# ── Environment & secrets ─────────────────────────────────────────────────────
+.env
+*.env
+.env.*
+!.env.example
+
+# ── Claude Code local overrides ───────────────────────────────────────────────
+CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+
+# ── Host cron job logs (infra/classify/classify-receipts.sh) ─────────────────
+infra/classify/*.log

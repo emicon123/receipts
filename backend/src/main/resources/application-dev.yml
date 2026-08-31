@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/receipts_dev}
+    username: ${SPRING_DATASOURCE_USERNAME:receipts}
+    password: ${SPRING_DATASOURCE_PASSWORD:receipts}
+  jpa:
+    show-sql: true
+
+logging:
+  level:
+    pl.receipts: DEBUG
+    org.hibernate.SQL: DEBUG

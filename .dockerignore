@@ -1,0 +1,14 @@
+# Keeps the build context (repo root — see infra/compose.yml build.context: ..) small.
+# Mirrors investing-app's root .dockerignore.
+
+.git
+.gitignore
+.claude
+
+backend/target
+node_modules
+frontend/node_modules
+frontend/dist
+
+docs
+infra/classify/*.log

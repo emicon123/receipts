@@ -1,0 +1,129 @@
+# docker-compose v2 — receipts app
+# Run from the repository root:
+#   docker compose -f infra/compose.yml --env-file .env.example config   # validate
+#   docker compose -f infra/compose.yml --env-file .env up -d --build    # deploy
+#
+# Same three-service shape as the sibling investing-app (nginx + backend + db), scaled
+# down: no shared network, no path-prefixed sibling apps, no pgAdmin by default (schema
+# is two tables — add it behind `profiles: [dev]` later if it's ever actually wanted).
+#
+# The daily classify-receipts.sh job is intentionally NOT a service here — it runs on the
+# host via cron (see infra/classify/README.md), never inside Docker.
+
+name: receipts
+
+services:
+
+  # ── Database ──────────────────────────────────────────────────────────────────
+  db:
+    image: postgres:17.11-alpine
+    platform: linux/arm64
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+        reservations:
+          memory: 128m
+
+  # ── Backend (Spring Boot) ────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ..
+      dockerfile: infra/docker/backend/Dockerfile
+    platform: linux/arm64
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Published to the HOST'S LOOPBACK ONLY (127.0.0.1), not the tailnet interface.
+      # infra/classify/classify-receipts.sh runs on this same host and needs to reach the
+      # backend directly at http://localhost:${BACKEND_PORT}/api (bypassing nginx — see
+      # that script and infra/classify/README.md); the PWA itself always goes through
+      # nginx's /api/ proxy instead. Binding to 127.0.0.1 means the raw backend port,
+      # unlike nginx's, is never reachable from other tailnet peers — only from this Pi.
+      - "127.0.0.1:${BACKEND_PORT:-8080}:8080"
+    environment:
+      TZ: Europe/Warsaw
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      # Spring Boot binds SPRING_DATASOURCE_* env vars to spring.datasource.* automatically
+      # — no custom property names needed. Built from the same POSTGRES_* vars as the db
+      # service so there's a single source of truth for DB credentials in .env.
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      RECEIPTS_STORAGE_PATH: ${RECEIPTS_STORAGE_PATH:-/data/receipts}
+      # No SPRING_SERVLET_MULTIPART_* override here — backend/src/main/resources/application.yml
+      # already sets max-file-size/max-request-size: 20MB directly (confirmed by reading that
+      # file). nginx's client_max_body_size (infra/nginx/nginx.conf) is set to match at 20m so
+      # neither layer is a tighter bottleneck than the other.
+    volumes:
+      # Named volume — receipt photos are the only copy of the source document and are
+      # kept indefinitely (ADR-006). Never a bind mount; must survive container recreation.
+      - receipts-images:/data/receipts
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # devops.md's original spec pointed this at /actuator/health, but backend/pom.xml
+      # (as actually built) has no spring-boot-starter-actuator dependency — confirmed live:
+      # that path returns HTTP 500, which would leave this container permanently
+      # "unhealthy" and block nginx's `depends_on: condition: service_healthy` forever.
+      # /api/categories is a real, always-available, side-effect-free endpoint from
+      # docs/openapi.yaml (static reference data) — confirmed live to return 200 with the
+      # correct category list once the app context is fully up. If Backend later adds
+      # actuator, switch this back to /actuator/health for a richer check (DB connectivity
+      # etc.) — flagged for Backend/Architect, not changed here since backend/ isn't DevOps-owned.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/categories | grep -q '\"data\"' || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+        reservations:
+          memory: 192m
+
+  # ── Nginx (reverse proxy + React PWA static files) ───────────────────────────
+  nginx:
+    build:
+      context: ..
+      dockerfile: infra/docker/nginx/Dockerfile
+    platform: linux/arm64
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # investing-app already publishes host port 80 on this Pi (see its infra/compose.yml)
+      # — receipts uses a different port for its Tailscale-reachable URL. Unlike backend's
+      # port above, this one IS meant to be reachable from the whole tailnet, so it is not
+      # restricted to 127.0.0.1. Container-side target is 8080, not 80 — this image runs
+      # fully non-root (see infra/docker/nginx/Dockerfile), so it can't bind a privileged
+      # port itself.
+      - "${NGINX_PORT:-8090}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 64m
+
+volumes:
+  db-data:
+  receipts-images:

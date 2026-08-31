@@ -1,0 +1,160 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens.
+ *
+ * Two token families:
+ *   1. shadcn/ui-style UI tokens (--background, --foreground, --primary, ...) that drive
+ *      component chrome (buttons, cards, inputs, badges).
+ *   2. Chart tokens (--chart-*) lifted verbatim from the dataviz skill's validated reference
+ *      palette (references/palette.md) — categorical slot 1 (blue) for single-series bars,
+ *      and the fixed status scale (good/warning/serious/critical) for receipt status badges.
+ *      Every hex below is copied unchanged from that palette, never hand-picked.
+ *
+ * Only `prefers-color-scheme` drives dark mode — this personal single-user app has no manual
+ * theme toggle, so there is no `.dark`/`[data-theme]` class to guard against.
+ */
+:root {
+  color-scheme: light;
+
+  --background: #f9f9f7;
+  --foreground: #0b0b0b;
+  --card: #fcfcfb;
+  --card-foreground: #0b0b0b;
+  --popover: #fcfcfb;
+  --popover-foreground: #0b0b0b;
+  --primary: #0f172a;
+  --primary-foreground: #f8fafc;
+  --secondary: #eef0f3;
+  --secondary-foreground: #0f172a;
+  --muted: #eef0f3;
+  --muted-foreground: #52514e;
+  --accent: #e5e9ef;
+  --accent-foreground: #0f172a;
+  --destructive: #d03b3b;
+  --destructive-foreground: #f8fafc;
+  --border: #e1e0d9;
+  --input: #e1e0d9;
+  --ring: #2a78d6;
+  --radius: 0.75rem;
+
+  /* Chart tokens — dataviz skill reference palette, light mode */
+  --chart-surface: #fcfcfb;
+  --chart-page: #f9f9f7;
+  --chart-text-primary: #0b0b0b;
+  --chart-text-secondary: #52514e;
+  --chart-muted: #898781;
+  --chart-grid: #e1e0d9;
+  --chart-baseline: #c3c2b7;
+  --chart-series-1: #2a78d6;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-warning-foreground: #7a4a00;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --background: #0d0d0d;
+    --foreground: #ffffff;
+    --card: #1a1a19;
+    --card-foreground: #ffffff;
+    --popover: #1a1a19;
+    --popover-foreground: #ffffff;
+    --primary: #e5e9ef;
+    --primary-foreground: #0f172a;
+    --secondary: #262624;
+    --secondary-foreground: #f8fafc;
+    --muted: #262624;
+    --muted-foreground: #c3c2b7;
+    --accent: #2c2c2a;
+    --accent-foreground: #f8fafc;
+    --destructive: #e66767;
+    --destructive-foreground: #1a1a19;
+    --border: #2c2c2a;
+    --input: #2c2c2a;
+    --ring: #3987e5;
+
+    /* Chart tokens — dataviz skill reference palette, dark mode */
+    --chart-surface: #1a1a19;
+    --chart-page: #0d0d0d;
+    --chart-text-primary: #ffffff;
+    --chart-text-secondary: #c3c2b7;
+    --chart-muted: #898781;
+    --chart-grid: #2c2c2a;
+    --chart-baseline: #383835;
+    --chart-series-1: #3987e5;
+    --status-good: #0ca30c;
+    --status-warning: #fab219;
+    --status-warning-foreground: #3a2400;
+    --status-serious: #ec835a;
+    --status-critical: #e66767;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-surface: var(--chart-surface);
+  --color-chart-page: var(--chart-page);
+  --color-chart-text-primary: var(--chart-text-primary);
+  --color-chart-text-secondary: var(--chart-text-secondary);
+  --color-chart-muted: var(--chart-muted);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-baseline: var(--chart-baseline);
+  --color-chart-series-1: var(--chart-series-1);
+  --color-status-good: var(--status-good);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-foreground: var(--status-warning-foreground);
+  --color-status-serious: var(--status-serious);
+  --color-status-critical: var(--status-critical);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    /* Prevent iOS auto-zoom-on-focus and keep the PWA's chrome full-bleed under notches. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    min-height: 100dvh;
+    overscroll-behavior-y: none;
+  }
+
+  #root {
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+}

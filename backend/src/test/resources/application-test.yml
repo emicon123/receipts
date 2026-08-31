@@ -1,0 +1,6 @@
+spring:
+  jpa:
+    show-sql: false
+receipts:
+  storage:
+    root-path: ./target/test-receipt-images

@@ -1,0 +1,787 @@
+openapi: "3.1.0"
+
+info:
+  title: Receipts App API
+  version: "1.0.0"
+  contact:
+    name: Wojtek
+  description: |
+    Personal receipt-tracking REST API. Single-user, **no authentication** — the app is
+    reachable only over the existing Tailscale VPN, same perimeter as the sibling
+    `investing-app` used before it added application-level auth (see ADR-004). There is no
+    `Authorization` header on any endpoint below.
+
+    ## Response envelope
+
+    - List endpoints that are genuinely paginated (`GET /receipts`) return
+      `{ data: [...], meta: {...}, page: {...} }`.
+    - Small, inherently unpaginated collections (`GET /receipts/pending`,
+      `GET /categories`, the arrays inside spending summary/trend) return
+      `{ data: [...] | {...}, meta: {...} }` — no `page` block, since there is nothing to
+      paginate.
+    - Single-resource endpoints return `{ data: {...}, meta: {...} }`.
+    - Errors return `{ errors: [{ code, field, message }], meta: {...} }`.
+
+    This mirrors `investing-app`'s convention exactly (see that repo's
+    `docs/openapi/components/schemas/common.yaml`), scaled down to a single file since this
+    app's ~13-endpoint surface doesn't justify a split source tree + bundler step.
+
+    ## Who calls what
+
+    Most endpoints are called by the React PWA. Three are called by
+    `infra/classify/classify-receipts.sh` (a host cron job, not the PWA) as it runs the daily
+    classification batch — each is annotated below with **"Called by
+    classify-receipts.sh"**. Claude itself (the `claude -p` invocation the script shells out
+    to) never calls this API directly — the script does all HTTP I/O, before and after.
+
+    ## Receipt status lifecycle
+
+    See `docs/architecture/03-receipt-lifecycle.md` for the full state diagram. Summary:
+    `PENDING` (just uploaded, or reset via reprocess) → `PROCESSING` (transient, held only
+    for the duration of one `classification-batch` request) → `PROCESSED` | `FAILED`.
+    `GET /receipts/pending` is a pure read and never changes status — this is deliberate
+    (see CLAUDE.md § Daily classification job): if the `claude` invocation later fails for
+    any reason, every receipt fetched in that run must still be sitting in `PENDING`, because
+    nothing touched it in between.
+
+servers:
+  - url: http://receipts-rpi/api
+    description: Production (Tailscale MagicDNS hostname — adjust to the actual device name; see DevOps)
+  - url: http://localhost:8080/api
+    description: Local development
+
+security: []  # No auth scheme anywhere in this API — Tailscale-perimeter only (ADR-004). Explicit
+              # empty list rather than omitting the field, so tooling doesn't assume an implicit
+              # default and flag every operation as "missing security".
+
+tags:
+  - name: receipts
+    description: Upload, list, detail, correction, reprocessing, deletion.
+  - name: classification
+    description: Endpoints called by the daily classify-receipts.sh cron job.
+  - name: spending
+    description: Aggregated category totals for the dashboard.
+  - name: categories
+    description: The fixed 11-category reference list.
+
+paths:
+  # ============================================================================
+  # Receipts
+  # ============================================================================
+
+  /receipts:
+    post:
+      tags: [receipts]
+      summary: Upload a receipt photo
+      description: |
+        Multipart image upload. Creates a `PENDING` / `CAMERA` receipt and returns
+        immediately — **no classification happens on this request**; the daily
+        `classify-receipts.sh` cron job picks it up later via `GET /receipts/pending`.
+      operationId: uploadReceipt
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [image]
+              properties:
+                image:
+                  type: string
+                  format: binary
+                  description: JPEG/PNG/WebP photo of the receipt.
+                capturedAt:
+                  type: string
+                  format: date-time
+                  description: |
+                    When the photo was taken. Optional — if the client omits it (typical
+                    case: photographing a receipt right after shopping), the server
+                    defaults it to the upload time.
+      responses:
+        "201":
+          description: Receipt created, status PENDING.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptSummaryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+    get:
+      tags: [receipts]
+      summary: List receipts
+      description: Filterable, paginated. Default sort is `capturedAt` descending.
+      operationId: listReceipts
+      parameters:
+        - name: year
+          in: query
+          schema: { type: integer, minimum: 2000, maximum: 2100 }
+        - name: month
+          in: query
+          description: 1–12. Requires `year` to also be present.
+          schema: { type: integer, minimum: 1, maximum: 12 }
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/ReceiptStatus" }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: size
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Page of receipts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /receipts/manual:
+    post:
+      tags: [receipts]
+      summary: Create a manual (no-photo) receipt entry
+      description: |
+        For entries with no photo — most commonly `RACHUNKI` bills. No image, no
+        classification step: creates the receipt straight into `PROCESSED` / `MANUAL` with
+        the line items given, and computes `totalAmount` immediately. Unlike
+        `classification-batch`, invalid input here is rejected with a normal `422` — this
+        is direct human input, not tolerant classifier output.
+      operationId: createManualReceipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ManualReceiptRequest"
+      responses:
+        "201":
+          description: Receipt created, status PROCESSED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptDetailResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /receipts/pending:
+    get:
+      tags: [receipts, classification]
+      summary: Lean list of pending receipt ids
+      description: |
+        **Called by classify-receipts.sh.** Returns every receipt currently `PENDING`.
+        Deliberately lean (`{id}` only, no image bytes/path) — the script fetches each
+        image separately via `GET /receipts/{id}/image`, keeping this endpoint free of
+        filesystem-path details. **Pure read — never mutates status** (see the lifecycle
+        note in this document's top-level description). Unpaginated by design: this is an
+        internal, small-scale queue, not a user-facing browse view.
+      operationId: listPendingReceipts
+      responses:
+        "200":
+          description: All PENDING receipts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PendingReceiptsResponse"
+
+  /receipts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [receipts]
+      summary: Get full receipt detail
+      description: Includes the image URL and every line item.
+      operationId: getReceipt
+      responses:
+        "200":
+          description: Receipt detail.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptDetailResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [receipts]
+      summary: Delete a receipt
+      description: Removes the row (line items cascade) and the image file on disk, if any.
+      operationId: deleteReceipt
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /receipts/{id}/image:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    get:
+      tags: [receipts, classification]
+      summary: Raw receipt image bytes
+      description: |
+        **Called by classify-receipts.sh** to download each pending receipt's photo to a
+        local temp file before invoking `claude`. Also used by the PWA to render the photo
+        in the receipt detail view.
+      operationId: getReceiptImage
+      responses:
+        "200":
+          description: Image bytes.
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "404":
+          description: Receipt not found, or it's a `MANUAL` receipt with no image.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /receipts/classification-batch:
+    post:
+      tags: [classification]
+      summary: Submit the daily classification batch
+      description: |
+        **Called by classify-receipts.sh**, once per run, after the single `claude -p`
+        invocation returns. Body is the classifier's raw JSON output, forwarded unchanged.
+
+        Per entry in `items`: replaces this receipt's existing **uncorrected** line items
+        (a `corrected=true` row from a prior manual fix is never touched), recomputes
+        `totalAmount`, and transitions the receipt `PENDING → PROCESSING → PROCESSED`
+        within one transaction. Per entry in `failures`: transitions
+        `PENDING → PROCESSING → FAILED` and sets `failureReason`.
+
+        **Idempotent per receipt** — safe to resubmit the same batch (e.g. after a retried
+        HTTP call): re-applying an `items` entry for a receipt already `PROCESSED` simply
+        replaces its uncorrected line items again with the same values.
+
+        **Tolerant of bad classifier output, per-entry.** A `lineItems[].category` outside
+        the fixed 11-value enum is never coerced and never allowed to abort the whole
+        request — the owning receipt is instead routed to `FAILED` with a `failureReason`
+        explaining the invalid category, exactly as if the classifier had reported it as a
+        failure itself, so it surfaces for manual review/reprocess. Same treatment for a
+        `receiptId` that doesn't exist (skipped, reported in the response, rest of the
+        batch still applies) — the one exception is a structurally malformed request body
+        (not valid JSON, or missing `items`/`failures`), which is a normal `400`.
+      operationId: submitClassificationBatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClassificationBatchRequest"
+      responses:
+        "200":
+          description: Batch applied (per-entry outcomes in the response body — see above).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassificationBatchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /receipts/{id}/line-items/{itemId}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+      - name: itemId
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    put:
+      tags: [receipts]
+      summary: Correct a line item
+      description: |
+        User-driven correction of a classifier-assigned (or manually-entered) line item.
+        Any field given replaces the current value; sets `corrected = true` so this row is
+        visually distinguishable in the UI and is never silently overwritten by a later
+        reprocess. Recomputes the parent receipt's `totalAmount` in the same transaction.
+      operationId: correctLineItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LineItemCorrectionRequest"
+      responses:
+        "200":
+          description: Updated line item.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LineItemResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
+  /receipts/{id}/reprocess:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    post:
+      tags: [receipts]
+      summary: Re-queue a receipt for classification
+      description: |
+        Resets the receipt back to `PENDING` (clearing `failureReason`/`processedAt`) so
+        the next `classify-receipts.sh` run — scheduled or manually invoked — picks it back
+        up. No classification logic here, purely a status reset.
+
+        - `status = FAILED` → always allowed.
+        - `status = PENDING` → no-op, returns 200 unchanged (idempotent).
+        - `status = PROCESSED` or `PROCESSING` (the latter only reachable if the backend
+          crashed mid-batch, an edge case beyond the quota-exhaustion retry CLAUDE.md
+          designs around) → requires `force: true`, otherwise `409` — this guards against
+          accidentally discarding a good `PROCESSED` result. Note that reprocessing itself
+          does **not** touch existing line items (that only happens on the *next*
+          `classification-batch` submission, which — per that endpoint's own rule — will
+          still preserve any `corrected = true` rows).
+      operationId: reprocessReceipt
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReprocessRequest"
+      responses:
+        "200":
+          description: Receipt reset to PENDING (or already was — no-op).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptSummaryResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Receipt is PROCESSED/PROCESSING and `force` was not set.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  # ============================================================================
+  # Spending aggregates
+  # ============================================================================
+
+  /spending/summary:
+    get:
+      tags: [spending]
+      summary: Per-category totals for one month
+      description: |
+        Always returns all 11 categories, zero-filled for any with no spend that month
+        (in the same fixed order as `GET /categories`) — this is cheap for the server to
+        compute and saves the dashboard from having to reconcile a partial list against
+        the category legend.
+      operationId: getSpendingSummary
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer, minimum: 2000, maximum: 2100 }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+      responses:
+        "200":
+          description: Category totals for the month.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingSummaryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /spending/trend:
+    get:
+      tags: [spending]
+      summary: Month-by-month category totals for a year
+      description: Always returns all 12 months, each zero-filled per category as in the summary endpoint above — feeds the trend chart without client-side gap-filling.
+      operationId: getSpendingTrend
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer, minimum: 2000, maximum: 2100 }
+      responses:
+        "200":
+          description: Twelve months of category totals.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingTrendResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  # ============================================================================
+  # Categories
+  # ============================================================================
+
+  /categories:
+    get:
+      tags: [categories]
+      summary: The fixed 11 spend categories
+      description: Static list (Polish label + gloss) for frontend dropdowns/legend. Source of truth for the rules behind each value is CLAUDE.md § Categories.
+      operationId: listCategories
+      responses:
+        "200":
+          description: The 11 categories, in canonical order.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CategoriesResponse"
+
+components:
+  responses:
+    BadRequest:
+      description: Malformed request (invalid query param combination, unparseable body).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    UnprocessableEntity:
+      description: Semantically invalid input (e.g. unknown category, empty line-item list).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  schemas:
+    # ---- Envelope primitives (mirrors investing-app's common.yaml) ----
+
+    Meta:
+      type: object
+      required: [requestId, timestamp]
+      properties:
+        requestId: { type: string, format: uuid, readOnly: true }
+        timestamp: { type: string, format: date-time, readOnly: true }
+
+    PageInfo:
+      type: object
+      required: [number, size, total]
+      properties:
+        number: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: VALIDATION_ERROR }
+        field: { type: string, nullable: true, example: "lineItems[0].category" }
+        message: { type: string, example: "must be one of the 11 fixed categories" }
+
+    ErrorResponse:
+      type: object
+      required: [errors, meta]
+      properties:
+        errors:
+          type: array
+          items: { $ref: "#/components/schemas/ErrorDetail" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Enums ----
+
+    ReceiptStatus:
+      type: string
+      enum: [PENDING, PROCESSING, PROCESSED, FAILED]
+
+    ReceiptSource:
+      type: string
+      enum: [CAMERA, MANUAL]
+
+    SpendCategory:
+      type: string
+      description: The fixed 11-value category enum. Canonical rules for each value are in CLAUDE.md § Categories at the repo root.
+      enum:
+        - ALKO
+        - JEDZENIE_KONIECZNE
+        - JEDZENIE_SREDNIE
+        - JEDZENIE_PIERDOLOWATE
+        - RZECZY_PALIWO_INNE_ROZNE
+        - RZECZY_LUKSUSOWE
+        - MYCIE_CHEMIA
+        - ROZRYWKA_RESTAURACJE
+        - RACHUNKI
+        - BOBINEK
+        - SUPLE
+
+    # ---- Categories ----
+
+    CategoryInfo:
+      type: object
+      required: [code, label, gloss]
+      properties:
+        code: { $ref: "#/components/schemas/SpendCategory" }
+        label: { type: string, description: "Polish label, e.g. \"Jedzenie konieczne\"" }
+        gloss: { type: string, description: "Short English gloss, e.g. \"Healthy food\"" }
+
+    CategoriesResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryInfo" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Line items ----
+
+    LineItem:
+      type: object
+      required: [id, productName, category, amount, corrected]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        productName: { type: string, maxLength: 300 }
+        category: { $ref: "#/components/schemas/SpendCategory" }
+        amount: { type: number, format: double }
+        quantity: { type: number, format: double, nullable: true }
+        corrected: { type: boolean }
+
+    LineItemInput:
+      type: object
+      required: [productName, category, amount]
+      properties:
+        productName: { type: string, maxLength: 300 }
+        category: { $ref: "#/components/schemas/SpendCategory" }
+        amount: { type: number, format: double, minimum: 0 }
+        quantity: { type: number, format: double, minimum: 0, nullable: true }
+
+    LineItemCorrectionRequest:
+      type: object
+      description: All fields optional — only the ones present are changed.
+      properties:
+        productName: { type: string, maxLength: 300 }
+        category: { $ref: "#/components/schemas/SpendCategory" }
+        amount: { type: number, format: double, minimum: 0 }
+        quantity: { type: number, format: double, minimum: 0, nullable: true }
+
+    LineItemResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/LineItem" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Receipts ----
+
+    ReceiptSummary:
+      type: object
+      required: [id, status, source, capturedAt, totalAmount, createdAt]
+      properties:
+        id: { type: integer, format: int64, readOnly: true }
+        status: { $ref: "#/components/schemas/ReceiptStatus" }
+        source: { $ref: "#/components/schemas/ReceiptSource" }
+        capturedAt: { type: string, format: date-time }
+        storeName: { type: string, nullable: true, maxLength: 200 }
+        totalAmount: { type: number, format: double, description: "Derived — SUM of this receipt's line items." }
+        imageUrl: { type: string, nullable: true, description: "Relative URL, e.g. /api/receipts/42/image. Null for MANUAL receipts." }
+        failureReason: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+
+    ReceiptDetail:
+      allOf:
+        - $ref: "#/components/schemas/ReceiptSummary"
+        - type: object
+          required: [lineItems]
+          properties:
+            processedAt: { type: string, format: date-time, nullable: true }
+            lineItems:
+              type: array
+              items: { $ref: "#/components/schemas/LineItem" }
+
+    ReceiptSummaryResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/ReceiptSummary" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    ReceiptDetailResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/ReceiptDetail" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    ReceiptListResponse:
+      type: object
+      required: [data, meta, page]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/ReceiptSummary" }
+        meta: { $ref: "#/components/schemas/Meta" }
+        page: { $ref: "#/components/schemas/PageInfo" }
+
+    ManualReceiptRequest:
+      type: object
+      required: [capturedAt, lineItems]
+      properties:
+        capturedAt: { type: string, format: date-time }
+        storeName: { type: string, maxLength: 200, nullable: true, description: "E.g. the utility/subscription provider name for a RACHUNKI bill." }
+        lineItems:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/LineItemInput" }
+
+    # ---- Pending list (classify-receipts.sh) ----
+
+    PendingReceiptRef:
+      type: object
+      required: [id]
+      properties:
+        id: { type: integer, format: int64 }
+
+    PendingReceiptsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/PendingReceiptRef" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Classification batch ----
+
+    ClassificationBatchItem:
+      type: object
+      required: [receiptId, lineItems]
+      properties:
+        receiptId: { type: integer, format: int64 }
+        storeName: { type: string, nullable: true, maxLength: 200 }
+        capturedAt: { type: string, format: date, nullable: true, description: "ISO-8601 YYYY-MM-DD as read off the receipt, if legible." }
+        lineItems:
+          type: array
+          items: { $ref: "#/components/schemas/LineItemInput" }
+
+    ClassificationBatchFailure:
+      type: object
+      required: [receiptId, reason]
+      properties:
+        receiptId: { type: integer, format: int64 }
+        reason: { type: string, description: "Free text from the classifier, e.g. \"photo too blurry to read any line items\"." }
+
+    ClassificationBatchRequest:
+      type: object
+      required: [items, failures]
+      description: This is exactly the raw JSON object the `claude -p` invocation emits (see infra/classify/prompt.md) — the wrapper script forwards it unchanged.
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ClassificationBatchItem" }
+        failures:
+          type: array
+          items: { $ref: "#/components/schemas/ClassificationBatchFailure" }
+
+    ClassificationBatchSkip:
+      type: object
+      required: [receiptId, reason]
+      properties:
+        receiptId: { type: integer, format: int64 }
+        reason: { type: string, example: "unknown receiptId" }
+
+    ClassificationBatchResult:
+      type: object
+      required: [processed, failed, skipped]
+      properties:
+        processed:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Receipt ids transitioned to PROCESSED.
+        failed:
+          type: array
+          items: { type: integer, format: int64 }
+          description: Receipt ids transitioned to FAILED (from `failures[]`, or from an invalid category caught server-side).
+        skipped:
+          type: array
+          items: { $ref: "#/components/schemas/ClassificationBatchSkip" }
+          description: Entries that referenced an unknown receiptId — left untouched, reported here rather than aborting the request.
+
+    ClassificationBatchResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/ClassificationBatchResult" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Reprocess ----
+
+    ReprocessRequest:
+      type: object
+      properties:
+        force:
+          type: boolean
+          default: false
+          description: Required to reset a PROCESSED or PROCESSING receipt back to PENDING; not needed for FAILED.
+
+    # ---- Spending aggregates ----
+
+    CategoryAmount:
+      type: object
+      required: [category, amount]
+      properties:
+        category: { $ref: "#/components/schemas/SpendCategory" }
+        amount: { type: number, format: double }
+
+    SpendingSummaryData:
+      type: object
+      required: [year, month, totalAmount, categories]
+      properties:
+        year: { type: integer }
+        month: { type: integer, minimum: 1, maximum: 12 }
+        totalAmount: { type: number, format: double }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryAmount" }
+
+    SpendingSummaryResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/SpendingSummaryData" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    SpendingMonth:
+      type: object
+      required: [month, totalAmount, categories]
+      properties:
+        month: { type: integer, minimum: 1, maximum: 12 }
+        totalAmount: { type: number, format: double }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/CategoryAmount" }
+
+    SpendingTrendData:
+      type: object
+      required: [year, months]
+      properties:
+        year: { type: integer }
+        months:
+          type: array
+          items: { $ref: "#/components/schemas/SpendingMonth" }
+
+    SpendingTrendResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/SpendingTrendData" }
+        meta: { $ref: "#/components/schemas/Meta" }
