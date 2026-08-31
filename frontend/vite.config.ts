@@ -5,7 +5,12 @@ import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Reverse-proxied under /paragony/ by investing-app's shared nginx (see
+  // infra/nginx/README or investing-app/infra/nginx/nginx.conf's /paragony/ location) —
+  // only for the production build. `npm run dev` stays at "/" so the dev-server proxy
+  // below (keyed on "/api") and local testing are unaffected.
+  base: command === "build" ? "/paragony/" : "/",
   plugins: [
     react(),
     tailwindcss(),
@@ -19,8 +24,8 @@ export default defineConfig({
         theme_color: "#0f172a",
         background_color: "#0f172a",
         display: "standalone",
-        start_url: "/",
-        scope: "/",
+        start_url: "/paragony/",
+        scope: "/paragony/",
         icons: [
           { src: "pwa-192x192.png", sizes: "192x192", type: "image/png" },
           { src: "pwa-512x512.png", sizes: "512x512", type: "image/png" },
@@ -54,4 +59,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));
