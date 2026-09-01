@@ -1,6 +1,13 @@
 # 04 — Capture → Upload → Classify → Correct Flow
 
 > **Audience:** All agents — this is the whole point of the app end to end.
+>
+> **Design-only addition (ADR-007):** the daily classification batch below is shown for the
+> original `CAMERA`-only shape and remains accurate for it unchanged. Once bank import lands, the
+> same batch also carries `BANK_IMPORT` ids (inline transaction text instead of an image
+> download) and Claude's reply gains a third, `uncertainCategory[]` outcome — see
+> `06-bank-integration.md`'s "Classification: Whole-Transaction, No Image" section for that
+> extension; it is not duplicated into the diagrams below.
 
 ---
 

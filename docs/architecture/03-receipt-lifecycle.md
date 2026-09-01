@@ -1,6 +1,11 @@
 # 03 — Receipt Status Lifecycle
 
 > **Audience:** Backend agent (primary), Frontend agent (for status-dependent UI).
+>
+> **Design-only addition (ADR-007):** a `BANK_IMPORT` receipt participates in this same status
+> enum plus one new value, `NEEDS_CATEGORY_REVIEW`, reachable only by that source — this document
+> stays focused on the `CAMERA`/`MANUAL` shape below unchanged; see `06-bank-integration.md`'s own
+> superset state diagram for the full picture including `BANK_IMPORT`.
 
 ---
 

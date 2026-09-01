@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { pl } from "date-fns/locale";
 import { NotebookPen } from "lucide-react";
 import { Link } from "react-router-dom";
 import { StatusBadge } from "@/components/receipts/StatusBadge";
@@ -27,11 +28,11 @@ export function ReceiptCard({ receipt }: { receipt: ReceiptSummary }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="truncate text-sm font-medium">
-            {receipt.storeName ?? (receipt.source === "MANUAL" ? "Manual entry" : "Receipt")}
+            {receipt.storeName ?? (receipt.source === "MANUAL" ? "Wpis ręczny" : "Paragon")}
           </p>
         </div>
         <p className="text-xs text-muted-foreground">
-          {format(new Date(receipt.capturedAt), "d MMM yyyy")}
+          {format(new Date(receipt.capturedAt), "d MMM yyyy", { locale: pl })}
         </p>
         <div className="mt-1.5">
           <StatusBadge status={receipt.status} />

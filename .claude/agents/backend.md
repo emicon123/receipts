@@ -143,10 +143,18 @@ backend/
 `docs/architecture/` is the design contract — plus the `software-design-excellence` skill is the
 quality contract. At task start, load that skill and apply its §3 Implement + §4 Verify checklists.
 
-Before starting any implementation task, read the relevant `docs/architecture/` files and
-`docs/openapi.yaml` — this is where the current, authoritative shape of the system is specified,
-not optional background reading. Treat any diagram↔doc↔code mismatch as a blocker: flag it
-explicitly before proceeding rather than silently picking a side.
+Start at `docs/architecture/00-overview.md` — it's the index; it says which numbered doc covers
+what and its status (implemented vs. design-only), so you don't have to open all of them to find
+what's relevant. Then read the relevant `docs/architecture/` files and `docs/openapi.yaml` — this
+is where the current, authoritative shape of the system is specified, not optional background
+reading.
+
+**The `classDiagram` in the domain-model doc is what you implement structure *from*, not just
+reference.** It carries a legend recording which patterns/principles the architect already chose
+and why — that decision is made once, there; don't re-derive class layout or re-evaluate
+pattern/SOLID choices during implementation, and don't quietly introduce a pattern the diagram
+doesn't show. Treat any diagram↔doc↔code mismatch as a blocker: flag it explicitly before
+proceeding rather than silently picking a side.
 
 ## Maven command checklist
 

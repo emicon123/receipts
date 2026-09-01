@@ -62,15 +62,15 @@ export function CategoryTrendGrid({ categories, months }: CategoryTrendGridProps
 
       <details>
         <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-          Show as table
+          Pokaż jako tabelę
         </summary>
         <div className="mt-2 overflow-x-auto">
           <table className="w-full min-w-[640px] text-xs">
-            <caption className="sr-only">Monthly spend per category for the selected year</caption>
+            <caption className="sr-only">Miesięczne wydatki na kategorię w wybranym roku</caption>
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">
                 <th scope="col" className="py-1 pr-2 font-medium">
-                  Category
+                  Kategoria
                 </th>
                 {months.map((m) => (
                   <th key={m.month} scope="col" className="px-1.5 py-1 text-right font-medium">

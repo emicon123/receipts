@@ -15,19 +15,19 @@ import pl.receipts.entity.SpendCategory;
 public class CategoryCatalogService {
 
     private static final List<CategoryInfo> CATEGORIES = List.of(
-            new CategoryInfo(SpendCategory.ALKO, "Alko", "Alcohol"),
-            new CategoryInfo(SpendCategory.JEDZENIE_KONIECZNE, "Jedzenie konieczne", "Healthy food"),
-            new CategoryInfo(SpendCategory.JEDZENIE_SREDNIE, "Jedzenie średnie", "Neutral food"),
-            new CategoryInfo(SpendCategory.JEDZENIE_PIERDOLOWATE, "Jedzenie pierdołowate", "Unhealthy food"),
+            new CategoryInfo(SpendCategory.ALKO, "Alko", "Alkohol"),
+            new CategoryInfo(SpendCategory.JEDZENIE_KONIECZNE, "Jedzenie konieczne", "Zdrowa żywność"),
+            new CategoryInfo(SpendCategory.JEDZENIE_SREDNIE, "Jedzenie średnie", "Jedzenie neutralne"),
+            new CategoryInfo(SpendCategory.JEDZENIE_PIERDOLOWATE, "Jedzenie pierdołowate", "Niezdrowe jedzenie"),
             new CategoryInfo(SpendCategory.RZECZY_PALIWO_INNE_ROZNE, "Rzeczy/paliwo/inne/różne",
-                    "General things, fuel, misc"),
-            new CategoryInfo(SpendCategory.RZECZY_LUKSUSOWE, "Rzeczy luksusowe", "Luxury items"),
-            new CategoryInfo(SpendCategory.MYCIE_CHEMIA, "Mycie/chemia", "Cleaning & chemicals"),
+                    "Rzeczy ogólne, paliwo, różne"),
+            new CategoryInfo(SpendCategory.RZECZY_LUKSUSOWE, "Rzeczy luksusowe", "Rzeczy luksusowe"),
+            new CategoryInfo(SpendCategory.MYCIE_CHEMIA, "Mycie/chemia", "Sprzątanie i chemia"),
             new CategoryInfo(SpendCategory.ROZRYWKA_RESTAURACJE, "Rozrywka/restauracje",
-                    "Entertainment & dining out"),
-            new CategoryInfo(SpendCategory.RACHUNKI, "Rachunki", "Bills"),
-            new CategoryInfo(SpendCategory.BOBINEK, "Bobinek", "Kid's stuff"),
-            new CategoryInfo(SpendCategory.SUPLE, "Suple", "Supplements")
+                    "Rozrywka i jedzenie na mieście"),
+            new CategoryInfo(SpendCategory.RACHUNKI, "Rachunki", "Rachunki"),
+            new CategoryInfo(SpendCategory.BOBINEK, "Bobinek", "Rzeczy dla dziecka"),
+            new CategoryInfo(SpendCategory.SUPLE, "Suple", "Suplementy")
     );
 
     public List<CategoryInfo> listAll() {

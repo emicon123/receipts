@@ -68,7 +68,7 @@ export function CategoryBreakdownChart({ categories, amounts }: CategoryBreakdow
               <LabelList
                 dataKey="amount"
                 position="right"
-                formatter={(value: number) => formatCurrency(value)}
+                formatter={(label) => formatCurrency(Number(label ?? 0))}
                 style={{ fill: "var(--chart-text-primary)", fontSize: 11, fontWeight: 600 }}
               />
             </Bar>
@@ -78,17 +78,17 @@ export function CategoryBreakdownChart({ categories, amounts }: CategoryBreakdow
 
       <details className="mt-2">
         <summary className="cursor-pointer text-xs font-medium text-muted-foreground">
-          Show as table
+          Pokaż jako tabelę
         </summary>
         <table className="mt-2 w-full text-sm">
-          <caption className="sr-only">Spend per category for the selected month</caption>
+          <caption className="sr-only">Wydatki na kategorię w wybranym miesiącu</caption>
           <thead>
             <tr className="border-b border-border text-left text-xs text-muted-foreground">
               <th scope="col" className="py-1 font-medium">
-                Category
+                Kategoria
               </th>
               <th scope="col" className="py-1 text-right font-medium">
-                Amount
+                Kwota
               </th>
             </tr>
           </thead>

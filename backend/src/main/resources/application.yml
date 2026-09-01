@@ -3,15 +3,10 @@ spring:
     name: receipts-backend
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
-  jackson:
-    default-property-inclusion: non_absent
-  servlet:
-    multipart:
-      enabled: true
-      # A phone photo can be several MB — generous limits per the Backend agent's gotchas list.
-      max-file-size: 20MB
-      max-request-size: 20MB
+  datasource:
+    connection-fetch: lazy
   jpa:
+    bootstrap-mode: deferred
     open-in-view: false
     hibernate:
       ddl-auto: none
@@ -19,12 +14,31 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+  jackson:
+    write:
+      default-property-inclusion: non_absent
+  servlet:
+    multipart:
+      enabled: true
+      max-file-size: 20MB
+      max-request-size: 20MB
   flyway:
     enabled: true
     locations: classpath:db/migration
 
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    accesslog:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  opentelemetry:
+    enabled: true
 
 springdoc:
   api-docs:

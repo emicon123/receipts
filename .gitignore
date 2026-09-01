@@ -39,3 +39,6 @@ CLAUDE.local.md
 
 # ── Host cron job logs (infra/classify/classify-receipts.sh) ─────────────────
 infra/classify/*.log
+
+# ── graphify generated knowledge-graph cache ──────────────────────────────────
+graphify-out/

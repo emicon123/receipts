@@ -10,16 +10,16 @@ interface NavItem {
 }
 
 const items: NavItem[] = [
-  { to: "/", label: "Capture", icon: Camera, end: true },
-  { to: "/receipts", label: "Receipts", icon: Receipt },
-  { to: "/dashboard", label: "Dashboard", icon: LayoutGrid },
-  { to: "/receipts/manual", label: "Manual", icon: PencilLine },
+  { to: "/", label: "Skanuj", icon: Camera, end: true },
+  { to: "/receipts", label: "Paragony", icon: Receipt },
+  { to: "/dashboard", label: "Wydatki", icon: LayoutGrid },
+  { to: "/receipts/manual", label: "Ręcznie", icon: PencilLine },
 ];
 
 export function BottomNav() {
   return (
     <nav
-      aria-label="Primary"
+      aria-label="Główna"
       className="sticky bottom-0 z-40 border-t border-border bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >

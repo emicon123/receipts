@@ -40,16 +40,17 @@ Load details:
 
 ## §2 Diagram — UML-First (Architect, Required Before Delegation)
 
-Create Mermaid diagrams in authoritative doc (`docs/architecture/diagrams/<task>.md` or inline in `docs/architecture/*.md`):
+Create Mermaid diagrams in authoritative doc (`docs/architecture/diagrams/<task>.md` or inline in `docs/architecture/*.md`). If the `mermaid` skill is available (`~/.claude/skills/mermaid/`), invoke it for every diagram — select type via its Diagram Type Reference and read the matching syntax doc in `mermaid/references/` before emitting code; follow its Output Specification and apply Configuration & Themes (theming/directives/layouts) where it improves clarity:
 
-- `classDiagram` — entities, DTOs, services, mappers, repos, clients, relationships + pattern annotations
-- `sequenceDiagram` / `flowchart` — request/response, multi-step flows, scheduled jobs
-- `stateDiagram-v2` / use-case `flowchart` — lifecycles, user journeys where applicable
+- `classDiagram` — entities, DTOs, services, mappers, repos, clients, relationships + pattern annotations → `mermaid/references/classDiagram.md`
+- `sequenceDiagram` / `flowchart` — request/response, multi-step flows, scheduled jobs → `mermaid/references/sequenceDiagram.md` / `mermaid/references/flowchart.md`
+- `stateDiagram-v2` / use-case `flowchart` — lifecycles, user journeys where applicable → `mermaid/references/stateDiagram.md`
+- `erDiagram` / `C4` / `architecture` — data model / system context where applicable → `mermaid/references/entityRelationshipDiagram.md` / `mermaid/references/c4.md` / `mermaid/references/architecture.md`
 
 Each diagram needs legend/notes stating which patterns/principles were applied and why.
 No delegation without committed diagrams; for trivial tasks write one-line justification instead.
 
-Optional paradigms/OOP context → [paradigms-and-oop.md](references/paradigms-and-oop.md)
+Optional paradigms/OOP context → [paradigms-and-oop.md](references/paradigms-and-oop.md) · Mermaid theming/directives/layouts → `mermaid/references/config-theming.md`, `config-directives.md`, `config-layouts.md`
 
 ## §3 Implement — Clean Code (Developer)
 
@@ -77,5 +78,6 @@ Before marking done, run the relevant checklist in [quality-gates.md](references
 | Design Patterns (GoF + PoSA) | [design-patterns.md](references/design-patterns.md) | Selecting patterns |
 | Architecture (Principles/Styles/Patterns + Enterprise) | [architecture.md](references/architecture.md) | System-level decisions |
 | Checklists | [quality-gates.md](references/quality-gates.md) | Before finishing any task |
+| Mermaid (if available) | `~/.claude/skills/mermaid/SKILL.md` + `mermaid/references/*.md` | Generating any Mermaid diagram — read matching syntax doc + Output Spec/Theming |
 
 Source roadmap: https://roadmap.sh/software-design-architecture and https://github.com/kamranahmedse/developer-roadmap

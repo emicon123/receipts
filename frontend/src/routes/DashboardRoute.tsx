@@ -22,10 +22,10 @@ export function DashboardRoute() {
   const trend = useSpendingTrend(trendYear);
 
   return (
-    <AppShell title="Dashboard">
+    <AppShell title="Wydatki">
       <Tabs defaultValue="summary">
         <TabsList className="w-full">
-          <TabsTrigger value="summary">Summary</TabsTrigger>
+          <TabsTrigger value="summary">Podsumowanie</TabsTrigger>
           <TabsTrigger value="trend">Trend</TabsTrigger>
         </TabsList>
 
@@ -40,16 +40,16 @@ export function DashboardRoute() {
           />
 
           {summary.isPending || categoriesPending ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">Ładowanie…</p>
           ) : summary.isError || !categories ? (
             <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              Couldn't load spending for this month.
+              Nie udało się wczytać wydatków za ten miesiąc.
             </p>
           ) : (
             <>
               <div>
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Total spend
+                  Łączne wydatki
                 </p>
                 <p className="text-3xl font-semibold tabular-nums">
                   {formatCurrency(summary.data.totalAmount)}
@@ -64,10 +64,10 @@ export function DashboardRoute() {
           <YearPicker year={trendYear} onChange={setTrendYear} />
 
           {trend.isPending || categoriesPending ? (
-            <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">Ładowanie…</p>
           ) : trend.isError || !categories ? (
             <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              Couldn't load the yearly trend.
+              Nie udało się wczytać trendu rocznego.
             </p>
           ) : (
             <CategoryTrendGrid categories={categories} months={trend.data.months} />

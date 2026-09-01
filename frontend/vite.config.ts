@@ -18,9 +18,9 @@ export default defineConfig(({ command }) => ({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
       manifest: {
-        name: "Receipts",
-        short_name: "Receipts",
-        description: "Photograph shopping receipts and track spend per category.",
+        name: "Paragony",
+        short_name: "Paragony",
+        description: "Zrób zdjęcie paragonów i śledź wydatki według kategorii.",
         theme_color: "#0f172a",
         background_color: "#0f172a",
         display: "standalone",
@@ -45,11 +45,13 @@ export default defineConfig(({ command }) => ({
     }),
   ],
   resolve: {
+    tsconfigPaths: true,
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   server: {
+    forwardConsole: true,
     proxy: {
       // Mirrors the Nginx /api/* proxy used in production so `npm run dev` can talk
       // to a locally running backend without CORS configuration.
@@ -59,4 +61,6 @@ export default defineConfig(({ command }) => ({
       },
     },
   },
+  devtools: true,
+  build: { minify: "oxc" },
 }));

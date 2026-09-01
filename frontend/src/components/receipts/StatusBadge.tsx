@@ -10,10 +10,10 @@ const STATUS_CONFIG: Record<
   ReceiptStatus,
   { label: string; variant: "good" | "warning" | "critical" | "secondary"; icon: typeof Clock }
 > = {
-  PENDING: { label: "Pending", variant: "warning", icon: Clock },
-  PROCESSING: { label: "Processing", variant: "secondary", icon: Loader2 },
-  PROCESSED: { label: "Processed", variant: "good", icon: CheckCircle2 },
-  FAILED: { label: "Failed", variant: "critical", icon: TriangleAlert },
+  PENDING: { label: "Oczekuje", variant: "warning", icon: Clock },
+  PROCESSING: { label: "Przetwarzanie", variant: "secondary", icon: Loader2 },
+  PROCESSED: { label: "Gotowe", variant: "good", icon: CheckCircle2 },
+  FAILED: { label: "Błąd", variant: "critical", icon: TriangleAlert },
 };
 
 export function StatusBadge({ status }: { status: ReceiptStatus }) {

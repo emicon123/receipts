@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { pl } from "date-fns/locale";
 import { RefreshCw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
@@ -65,12 +66,12 @@ export function ReceiptDetailRoute() {
   }
 
   return (
-    <AppShell title="Receipt">
-      {isPending && <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>}
+    <AppShell title="Paragon">
+      {isPending && <p className="py-8 text-center text-sm text-muted-foreground">Ładowanie…</p>}
 
       {isError && (
         <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          Couldn't load this receipt.
+          Nie udało się wczytać paragonu.
         </p>
       )}
 
@@ -78,17 +79,17 @@ export function ReceiptDetailRoute() {
         <div className="flex flex-col gap-4">
           {receipt.imageUrl && (
             <div className="overflow-hidden rounded-xl border border-border bg-card">
-              <img src={receipt.imageUrl} alt="Receipt" className="w-full object-contain" />
+              <img src={receipt.imageUrl} alt="Paragon" className="w-full object-contain" />
             </div>
           )}
 
           <div className="flex items-start justify-between gap-2 rounded-xl border border-border bg-card p-3">
             <div>
               <p className="font-medium">
-                {receipt.storeName ?? (receipt.source === "MANUAL" ? "Manual entry" : "Receipt")}
+                {receipt.storeName ?? (receipt.source === "MANUAL" ? "Wpis ręczny" : "Paragon")}
               </p>
               <p className="text-sm text-muted-foreground">
-                {format(new Date(receipt.capturedAt), "d MMMM yyyy")}
+                {format(new Date(receipt.capturedAt), "d MMMM yyyy", { locale: pl })}
               </p>
               <div className="mt-2">
                 <StatusBadge status={receipt.status} />
@@ -101,17 +102,17 @@ export function ReceiptDetailRoute() {
 
           {receipt.status === "FAILED" && (
             <div className="rounded-xl border border-status-critical/30 bg-status-critical/10 p-3">
-              <p className="text-sm font-medium text-status-critical">Classification failed</p>
+              <p className="text-sm font-medium text-status-critical">Klasyfikacja nie powiodła się</p>
               {receipt.failureReason && (
                 <p className="mt-1 text-sm text-status-critical/90">{receipt.failureReason}</p>
               )}
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button type="button" size="sm" onClick={() => handleReprocess(false)}>
                   <RefreshCw />
-                  Reprocess
+                  Przetwórz ponownie
                 </Button>
                 <Button type="button" size="sm" variant="outline" onClick={goToManualEntry}>
-                  Switch to manual entry
+                  Przepisz ręcznie
                 </Button>
               </div>
             </div>
@@ -119,13 +120,13 @@ export function ReceiptDetailRoute() {
 
           {receipt.status === "PENDING" && (
             <p className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
-              Waiting for the next daily classification run.
+              Oczekiwanie na kolejną dzienną klasyfikację.
             </p>
           )}
 
           {receipt.lineItems.length > 0 && categories && (
             <div>
-              <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Line items</h2>
+              <h2 className="mb-2 text-sm font-semibold text-muted-foreground">Pozycje</h2>
               <ul className="flex flex-col gap-2">
                 {receipt.lineItems.map((item) => (
                   <LineItemRow
@@ -143,7 +144,7 @@ export function ReceiptDetailRoute() {
                 <p role="alert" className="mt-2 text-sm text-destructive">
                   {correctLineItem.error instanceof ApiError
                     ? correctLineItem.error.message
-                    : "Couldn't save that change."}
+                    : "Nie udało się zapisać zmiany."}
                 </p>
               )}
             </div>
@@ -158,7 +159,7 @@ export function ReceiptDetailRoute() {
                 onClick={() => setConfirmOpen("reprocess")}
               >
                 <RefreshCw />
-                Reprocess
+                Przetwórz ponownie
               </Button>
             )}
             <Button
@@ -169,7 +170,7 @@ export function ReceiptDetailRoute() {
               onClick={() => setConfirmOpen("delete")}
             >
               <Trash2 />
-              Delete
+              Usuń
             </Button>
           </div>
         </div>
@@ -178,18 +179,18 @@ export function ReceiptDetailRoute() {
       <Dialog open={confirmOpen === "reprocess"} onOpenChange={(open) => !open && setConfirmOpen(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Reprocess this receipt?</DialogTitle>
+            <DialogTitle>Przetworzyć paragon ponownie?</DialogTitle>
             <DialogDescription>
-              This discards the current classification results (your corrected line items are
-              kept) and re-queues it for the next classification run.
+              Spowoduje to odrzucenie bieżących wyników klasyfikacji (poprawione pozycje zostaną
+              zachowane) i ponowne zakolejkowanie do następnej klasyfikacji.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(null)}>
-              Cancel
+              Anuluj
             </Button>
             <Button type="button" onClick={() => handleReprocess(true)}>
-              Reprocess
+              Przetwórz ponownie
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -198,18 +199,18 @@ export function ReceiptDetailRoute() {
       <Dialog open={confirmOpen === "delete"} onOpenChange={(open) => !open && setConfirmOpen(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete this receipt?</DialogTitle>
+            <DialogTitle>Usunąć paragon?</DialogTitle>
             <DialogDescription>
-              This permanently removes the receipt, its line items, and its photo. This can't be
-              undone.
+              Spowoduje to trwałe usunięcie paragonu, jego pozycji i zdjęcia. Tej operacji nie
+              można cofnąć.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(null)}>
-              Cancel
+              Anuluj
             </Button>
             <Button type="button" variant="destructive" onClick={handleDelete}>
-              Delete
+              Usuń
             </Button>
           </DialogFooter>
         </DialogContent>

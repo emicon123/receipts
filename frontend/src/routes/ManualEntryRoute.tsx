@@ -33,11 +33,11 @@ function dateInputToIso(dateInput: string): string {
 }
 
 const draftSchema = z.object({
-  productName: z.string().trim().min(1, "Required").max(300),
-  category: z.string().min(1, "Required"),
+  productName: z.string().trim().min(1, { error: "Wymagane" }).max(300),
+  category: z.string().min(1, { error: "Wymagane" }),
   amount: z
     .string()
-    .refine((v) => Number.isFinite(Number(v)) && Number(v) >= 0, "Must be a positive amount"),
+    .refine((v) => Number.isFinite(Number(v)) && Number(v) >= 0, { error: "Musi być kwotą dodatnią" }),
 });
 
 export function ManualEntryRoute() {
@@ -76,7 +76,7 @@ export function ManualEntryRoute() {
     for (const item of items) {
       const result = draftSchema.safeParse(item);
       if (!result.success) {
-        errors[item.clientId] = result.error.issues[0]?.message ?? "Invalid";
+        errors[item.clientId] = result.error.issues[0]?.message ?? "Nieprawidłowe";
       }
     }
     setRowErrors(errors);
@@ -101,14 +101,14 @@ export function ManualEntryRoute() {
   }
 
   return (
-    <AppShell title="Manual entry">
+    <AppShell title="Dodaj ręcznie">
       <form onSubmit={handleSubmit} className="flex flex-col gap-5">
         <p className="text-sm text-muted-foreground">
-          For entries with no photo — most commonly bills (Rachunki).
+          Dla wpisów bez zdjęcia — najczęściej rachunki (Rachunki).
         </p>
 
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="capturedAt">Date</Label>
+          <Label htmlFor="capturedAt">Data</Label>
           <Input
             id="capturedAt"
             type="date"
@@ -119,25 +119,25 @@ export function ManualEntryRoute() {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="storeName">Store / provider (optional)</Label>
+          <Label htmlFor="storeName">Sklep / dostawca (opcjonalnie)</Label>
           <Input
             id="storeName"
             value={storeName}
             onChange={(e) => setStoreName(e.target.value)}
-            placeholder="e.g. electricity provider"
+            placeholder="np. dostawca prądu"
           />
         </div>
 
         <div className="flex flex-col gap-3">
-          <h2 className="text-sm font-semibold text-muted-foreground">Line items</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">Pozycje</h2>
           {items.map((item, index) => (
             <div key={item.clientId} className="flex flex-col gap-2 rounded-lg border border-border bg-card p-3">
               <div className="flex items-start justify-between gap-2">
                 <Input
                   value={item.productName}
                   onChange={(e) => updateItem(item.clientId, { productName: e.target.value })}
-                  placeholder="Product / description"
-                  aria-label={`Line item ${index + 1} name`}
+                  placeholder="Produkt / opis"
+                  aria-label={`Pozycja ${index + 1} nazwa`}
                   className="h-9 flex-1"
                 />
                 <Button
@@ -147,7 +147,7 @@ export function ManualEntryRoute() {
                   className="size-9 shrink-0 text-muted-foreground"
                   onClick={() => removeItem(item.clientId)}
                   disabled={items.length === 1}
-                  aria-label="Remove line item"
+                  aria-label="Usuń pozycję"
                 >
                   <Trash2 className="size-4" />
                 </Button>
@@ -158,8 +158,8 @@ export function ManualEntryRoute() {
                   value={item.category}
                   onValueChange={(value) => updateItem(item.clientId, { category: value })}
                 >
-                  <SelectTrigger className="h-9 flex-1 text-sm" aria-label={`Line item ${index + 1} category`}>
-                    <SelectValue placeholder="Category" />
+                  <SelectTrigger className="h-9 flex-1 text-sm" aria-label={`Pozycja ${index + 1} kategoria`}>
+                    <SelectValue placeholder="Kategoria" />
                   </SelectTrigger>
                   <SelectContent>
                     {categories?.map((category) => (
@@ -177,8 +177,8 @@ export function ManualEntryRoute() {
                   min={0}
                   value={item.amount}
                   onChange={(e) => updateItem(item.clientId, { amount: e.target.value })}
-                  placeholder="0.00"
-                  aria-label={`Line item ${index + 1} amount`}
+                  placeholder="0,00"
+                  aria-label={`Pozycja ${index + 1} kwota`}
                   className="h-9 w-24 text-right tabular-nums"
                 />
               </div>
@@ -193,7 +193,7 @@ export function ManualEntryRoute() {
 
           <Button type="button" variant="outline" size="sm" onClick={addItem} className="self-start">
             <Plus />
-            Add item
+            Dodaj pozycję
           </Button>
         </div>
 
@@ -201,12 +201,12 @@ export function ManualEntryRoute() {
           <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {createManualReceipt.error instanceof ApiError
               ? createManualReceipt.error.message
-              : "Couldn't save this entry."}
+              : "Nie udało się zapisać wpisu."}
           </p>
         )}
 
         <Button type="submit" size="lg" disabled={createManualReceipt.isPending}>
-          {createManualReceipt.isPending ? "Saving…" : "Save entry"}
+          {createManualReceipt.isPending ? "Zapisywanie…" : "Zapisz wpis"}
         </Button>
       </form>
     </AppShell>
