@@ -18,6 +18,13 @@ Single user, no accounts, no multi-tenant model. Runs on the same Raspberry Pi h
 the sibling `investing-app`, reachable only over the existing Tailscale VPN — there is no
 application-level authentication (ADR-004).
 
+A second, optional receipt source exists alongside the camera: once a day, PKO Bank Polski
+transactions are imported via PSD2 account-information access (ADR-007,
+`docs/architecture/06-bank-integration.md`) — this closes the gap for spending that never
+produces a photo (BLIK purchases, bank transfers). This is entirely off by default (no bank
+connected) and design-only as of this pass — see that document for the full picture; this
+document's diagram below stays focused on what's actually running today.
+
 ---
 
 ## Running Components
@@ -40,20 +47,29 @@ Raspberry Pi (ARM64, Docker Compose)
 
 Raspberry Pi host (OUTSIDE Docker)
 │
-└── infra/classify/classify-receipts.sh — daily cron (06:00 Warsaw primary run, plus a few
-    same-day safety-net slots — see 04-classification-flow.md): shells out to the
-    host-installed `claude` CLI (`claude -p --allowedTools Read`) to classify every PENDING
-    receipt in one batched invocation, then POSTs the result back to the backend over the
-    same internal network. This is the only component in the system that does not run
-    inside Docker — same shape as investing-app's infra/news/news-research.sh.
+├── infra/classify/classify-receipts.sh — daily cron (06:00 Warsaw primary run, plus a few
+│   same-day safety-net slots — see 04-classification-flow.md): shells out to the
+│   host-installed `claude` CLI (`claude -p --allowedTools Read`) to classify every PENDING
+│   receipt (both CAMERA photos and BANK_IMPORT transaction text — see
+│   06-bank-integration.md) in one batched invocation, then POSTs the result back to the
+│   backend over the same internal network. This is the only component in the system that
+│   does not run inside Docker — same shape as investing-app's infra/news/news-research.sh.
+│
+└── bank-sync trigger (NOT YET BUILT — DevOps follow-up, ADR-007/06-bank-integration.md) —
+    a daily cron entry calling POST /api/bank/sync, scheduled after classify-receipts.sh.
 ```
 
-No outbound calls from the Spring Boot backend to any external service — unlike investing-app
-(Yahoo Finance, Binance, FRED, etc.), this app has no market-data or third-party integrations at
-all. The only "external" call in the whole system is the host cron script's invocation of the
-locally-installed `claude` CLI, which itself makes no network calls in this app (`--allowedTools
-"Read"` only — it reads local image files and emits JSON; it never calls the backend, and it
-does not use WebSearch/WebFetch the way investing-app's news job does).
+No outbound calls from the Spring Boot backend to any external service today — unlike
+investing-app (Yahoo Finance, Binance, FRED, etc.), this app has had no market-data or
+third-party integrations. The only "external" call in the running system is the host cron
+script's invocation of the locally-installed `claude` CLI, which itself makes no network calls in
+this app (`--allowedTools "Read"` only — it reads local image files and emits JSON; it never
+calls the backend, and it does not use WebSearch/WebFetch the way investing-app's news job does).
+
+**This changes once bank integration lands** (design-only for now, ADR-007): the backend will
+make outbound HTTPS calls to PKO Bank Polski's PSD2 API from `POST /api/bank/sync` and the
+consent endpoints — the first external network dependency this app has ever had. See
+`06-bank-integration.md`.
 
 ---
 

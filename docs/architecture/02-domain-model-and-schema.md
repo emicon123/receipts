@@ -9,13 +9,23 @@
 
 ## Domain Overview
 
-Two tables carry the entire domain: a `receipts` header row per photographed-or-manually-entered
-receipt, and a `receipt_line_items` row per product on it. Categories are a fixed 11-value
-Postgres enum, not a lookup table (see ADR-005) — the canonical source of truth for what each
-value means is `CLAUDE.md § Categories` at the repo root; this document only translates that
-table into SQL, it does not redefine the rules.
+Two tables carry the core domain: a `receipts` header row per photographed, manually-entered, or
+bank-imported receipt, and a `receipt_line_items` row per product/whole-transaction category on
+it. Categories are a fixed 11-value Postgres enum, not a lookup table (see ADR-005) — the
+canonical source of truth for what each value means is `CLAUDE.md § Categories` at the repo root;
+this document only translates that table into SQL, it does not redefine the rules.
+
+> **Bank-import addition (design-only, ADR-007):** a third receipt source, `BANK_IMPORT`, and two
+> small supporting tables (`bank_connection`, `bank_transaction_log`) are designed in
+> `06-bank-integration.md` — that document owns the full reasoning; this section is updated to
+> stay consistent with it but keeps the narrative brief where 06 already covers it in depth.
 
 ## ER Diagram
+
+This is the schema as it exists in `V1__init.sql` today (two tables). See
+`06-bank-integration.md` for the full updated ER diagram including `BANK_IMPORT`'s two new
+columns and the `bank_connection`/`bank_transaction_log` tables — not duplicated here to avoid
+two diagrams drifting out of sync; that document is the current one once bank import lands.
 
 ```mermaid
 erDiagram
@@ -57,6 +67,11 @@ CREATE TYPE spend_category_enum AS ENUM (
 );
 ```
 
+> **Design-only addition (ADR-007, not yet migrated):** `receipt_source_enum` gains a third value
+> `BANK_IMPORT`, and `receipt_status_enum` gains a fifth value `NEEDS_CATEGORY_REVIEW` (reachable
+> only by `BANK_IMPORT` receipts). Full detail, new columns, and new tables in
+> `06-bank-integration.md`.
+
 ## Critical Domain Rules
 
 1. **`total_amount` is derived, never independently entered.** It is `SUM(receipt_line_items.amount)`
@@ -80,6 +95,11 @@ CREATE TYPE spend_category_enum AS ENUM (
 6. **`failure_reason` is set if and only if `status = 'FAILED'`** — also a DB-level `CHECK`, so a
    `reprocess` (which resets both together) can't accidentally leave a stale reason behind, and
    nothing else can set a reason without also setting the status.
+7. **(Design-only, ADR-007) `NEEDS_CATEGORY_REVIEW` is reachable only by `BANK_IMPORT` receipts.**
+   `CAMERA`/`MANUAL` line-item classification keeps its existing "always guess, human corrects
+   later" policy unchanged — this new status exists only for whole-transaction bank
+   classification, where an unconfident guess must not be forced through. See
+   `06-bank-integration.md`.
 
 ## Indexes
 
@@ -114,6 +134,11 @@ repeated per endpoint, since the same reasoning applies uniformly across this ap
 | CQRS | **rejected** | Read and write models are identical-shape DTOs over 2 tables; splitting them buys nothing at this scale. |
 | Specification pattern (query filters) | **rejected** | 3 optional filters (`year`/`month`/`status`) map directly to a Spring Data JPA query method or a small JPQL query — a Specification/Criteria abstraction is overkill. |
 | "Claim-and-release" on `GET /pending` (mark `PROCESSING` on fetch) | **rejected** | Considered, to guard `GET /pending` against overlapping cron runs. Rejected: CLAUDE.md's job design already serializes runs (the same-day safety-net slots are sequential, not concurrent), and the "every receipt stays `PENDING` on any failure" rule requires `GET /pending` to be a pure, non-mutating read — see `03-receipt-lifecycle.md` for where `PROCESSING` is actually used instead. |
+
+**Bank-import additions (design-only, ADR-007):** Ports & Adapters for the PSD2 client, and
+several more pattern calls specific to that integration (a rejected three-way match state
+machine, a rejected `@Scheduled` timer, etc.) — see the dedicated table in
+`06-bank-integration.md` rather than duplicating it here.
 
 **Money representation:** `NUMERIC(10,2)` in Postgres, `number`/`format: double` in the JSON API
 (matching investing-app's own `deposits.amount` convention) — not a string-encoded decimal. A

@@ -63,6 +63,13 @@ tags:
     description: Aggregated category totals for the dashboard.
   - name: categories
     description: The fixed 11-category reference list.
+  - name: bank-integration
+    description: |
+      **Design-only (ADR-007, docs/architecture/06-bank-integration.md) — not implemented yet.**
+      PSD2 account-information (AIS) integration with PKO Bank Polski: PWA-driven consent flow,
+      connection status, and the daily bank-sync job entry point. Every endpoint under this tag
+      is unimplemented until Backend/DevOps follow-up work lands and the user has PKO sandbox
+      (later, production) credentials.
 
 paths:
   # ============================================================================
@@ -125,6 +132,12 @@ paths:
         - name: status
           in: query
           schema: { $ref: "#/components/schemas/ReceiptStatus" }
+        - name: source
+          in: query
+          description: |
+            Design-only filter value: `BANK_IMPORT` is not returned by any endpoint yet
+            (ADR-007) — reserved so the frontend's filter UI is forward-compatible.
+          schema: { $ref: "#/components/schemas/ReceiptSource" }
         - name: page
           in: query
           schema: { type: integer, minimum: 0, default: 0 }
@@ -176,11 +189,16 @@ paths:
       summary: Lean list of pending receipt ids
       description: |
         **Called by classify-receipts.sh.** Returns every receipt currently `PENDING`.
-        Deliberately lean (`{id}` only, no image bytes/path) — the script fetches each
-        image separately via `GET /receipts/{id}/image`, keeping this endpoint free of
-        filesystem-path details. **Pure read — never mutates status** (see the lifecycle
-        note in this document's top-level description). Unpaginated by design: this is an
-        internal, small-scale queue, not a user-facing browse view.
+        Deliberately lean for `CAMERA` entries (`{id, source}` only, no image bytes/path) —
+        the script fetches each image separately via `GET /receipts/{id}/image`, keeping
+        this endpoint free of filesystem-path details. **Pure read — never mutates status**
+        (see the lifecycle note in this document's top-level description). Unpaginated by
+        design: this is an internal, small-scale queue, not a user-facing browse view.
+
+        **Design-only (ADR-007, not implemented):** a `BANK_IMPORT` entry has no image to
+        fetch, so its transaction facts are carried **inline** on this response instead
+        (`counterpartyName`, `transactionTitle`, `amount`, `capturedAt`) — see
+        `docs/architecture/06-bank-integration.md`.
       operationId: listPendingReceipts
       responses:
         "200":
@@ -243,7 +261,7 @@ paths:
             image/png: { schema: { type: string, format: binary } }
             image/webp: { schema: { type: string, format: binary } }
         "404":
-          description: Receipt not found, or it's a `MANUAL` receipt with no image.
+          description: Receipt not found, or it's a `MANUAL`/`BANK_IMPORT` receipt with no image.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -274,6 +292,17 @@ paths:
         `receiptId` that doesn't exist (skipped, reported in the response, rest of the
         batch still applies) — the one exception is a structurally malformed request body
         (not valid JSON, or missing `items`/`failures`), which is a normal `400`.
+
+        **Design-only (ADR-007, not implemented):** the request gains a third array,
+        `uncertainCategory`, alongside `items`/`failures` — for a `BANK_IMPORT` receipt id
+        Claude isn't confident enough to categorize (whole-transaction classification has
+        no per-line-item granularity to fall back on, so the category can't just be
+        guessed the way a `CAMERA` line item's can). Each such entry transitions its
+        receipt to `NEEDS_CATEGORY_REVIEW` rather than forcing a guess — resolved by hand
+        via `PUT /receipts/{id}/category`. A `CAMERA` receipt id must never appear in this
+        array (its existing "always guess" policy is unchanged); if it does, that entry is
+        tolerated like an unknown `receiptId` — skipped and reported, never a 400. See
+        `docs/architecture/06-bank-integration.md`.
       operationId: submitClassificationBatch
       requestBody:
         required: true
@@ -328,6 +357,51 @@ paths:
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
 
+  /receipts/{id}/category:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: integer, format: int64 }
+    put:
+      tags: [receipts, bank-integration]
+      summary: Manually assign a category to a NEEDS_CATEGORY_REVIEW receipt
+      description: |
+        **Design-only (ADR-007, not implemented).** Resolves a `BANK_IMPORT` receipt that
+        Claude wasn't confident enough to auto-categorize (see
+        `POST /receipts/classification-batch`'s `uncertainCategory` array). Creates that
+        receipt's single line item (`productName` = `bankTransactionTitle` if present else
+        `storeName`, `category` = the given value, `amount` = `bankTransactionAmount`,
+        `corrected = true` immediately — first-party human input gets the same protection
+        a hand-correction does), recomputes `totalAmount`, and transitions
+        `NEEDS_CATEGORY_REVIEW → PROCESSED`.
+
+        Only valid when `status = NEEDS_CATEGORY_REVIEW` — `409` otherwise. Not reachable
+        via `reprocess`: re-running the classifier against the same fixed transaction text
+        would reach the same "not confident" conclusion again, so this is the only
+        resolution path. See `docs/architecture/06-bank-integration.md`.
+      operationId: assignReceiptCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignCategoryRequest"
+      responses:
+        "200":
+          description: Category assigned, receipt now PROCESSED.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReceiptDetailResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Receipt is not in NEEDS_CATEGORY_REVIEW.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
   /receipts/{id}/reprocess:
     parameters:
       - name: id
@@ -351,6 +425,10 @@ paths:
           does **not** touch existing line items (that only happens on the *next*
           `classification-batch` submission, which — per that endpoint's own rule — will
           still preserve any `corrected = true` rows).
+        - `status = NEEDS_CATEGORY_REVIEW` → **not valid, `409` regardless of `force`**
+          (design-only, ADR-007): re-running the classifier against the same fixed
+          transaction text would reach the same "not confident" conclusion again — use
+          `PUT /receipts/{id}/category` instead.
       operationId: reprocessReceipt
       requestBody:
         required: false
@@ -445,6 +523,124 @@ paths:
               schema:
                 $ref: "#/components/schemas/CategoriesResponse"
 
+  # ============================================================================
+  # Bank integration (PKO BP PSD2) — DESIGN-ONLY, ADR-007. Not implemented.
+  # See docs/architecture/06-bank-integration.md for the full contract this sketches.
+  # ============================================================================
+
+  /bank/consent:
+    post:
+      tags: [bank-integration]
+      summary: Initiate the PSD2 consent flow
+      description: |
+        **Design-only (ADR-007, not implemented).** Called by the PWA's Settings screen.
+        The backend asks PKO to start an OAuth2 authorization-code consent request and
+        returns the URL the PWA should redirect the user's browser to for SCA — the actual
+        login/2FA happens entirely on PKO's own site, not in this app. Sets
+        `bank_connection.status = PENDING_CONSENT`.
+      operationId: initiateBankConsent
+      responses:
+        "200":
+          description: Redirect URL for the PWA to navigate to.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InitiateBankConsentResponse"
+        "409":
+          description: A connection is already ACTIVE — disconnect first (DELETE /bank/connection).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /bank/consent/callback:
+    get:
+      tags: [bank-integration]
+      summary: OAuth2 authorization-code callback (browser-navigated, not an XHR call)
+      description: |
+        **Design-only (ADR-007, not implemented).** The redirect target PKO's own SCA flow
+        sends the user's browser back to — never called directly by the PWA's JS. Exchanges
+        the authorization `code` for access/refresh tokens, persists them to
+        `bank_connection` (`status = ACTIVE`), and 302-redirects the browser back into the
+        PWA. Must be reachable over Tailscale from the user's phone at the moment PKO
+        redirects back (same perimeter as the rest of this app — no public exposure).
+      operationId: completeBankConsent
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect back into the PWA (e.g. /paragony/settings?bankConnected=true).
+        "400":
+          description: Invalid/expired state, or PKO reported a consent denial.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /bank/connection:
+    get:
+      tags: [bank-integration]
+      summary: Current bank connection status
+      description: |
+        **Design-only (ADR-007, not implemented).** For the Settings screen. **Never**
+        returns raw token values — status/expiry/timestamps only.
+      operationId: getBankConnection
+      responses:
+        "200":
+          description: Connection status (DISCONNECTED if never connected).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankConnectionResponse"
+    delete:
+      tags: [bank-integration]
+      summary: Disconnect the bank connection
+      description: |
+        **Design-only (ADR-007, not implemented).** Clears stored tokens locally and sets
+        `status = DISCONNECTED`. Does not delete any already-imported BANK_IMPORT receipts
+        or bank_transaction_log history.
+      operationId: deleteBankConnection
+      responses:
+        "204":
+          description: Disconnected.
+
+  /bank/sync:
+    post:
+      tags: [bank-integration, classification]
+      summary: Run the daily bank-transaction sync
+      description: |
+        **Design-only (ADR-007, not implemented).** Mirrors `classification-batch`'s shape
+        as this app's other daily-batch entry point — called by a host-cron trigger
+        (scheduled after classify-receipts.sh, see the ordering-hazard note in
+        `docs/architecture/06-bank-integration.md`), not by the PWA.
+
+        Refreshes the access token transparently if needed; fetches every account's
+        transactions since the last successful sync; for each transaction not already in
+        `bank_transaction_log` (idempotent — safe to call more than once), runs the
+        date+amount dedup heuristic against PROCESSED CAMERA/MANUAL receipts — a confident
+        match is silently discarded (logged, no receipt created), otherwise a `PENDING`
+        `BANK_IMPORT` receipt is created for the next classification batch to pick up.
+
+        **Always returns 200**, even when the consent has expired — this run then makes
+        zero writes to `receipts`/`bank_transaction_log`, sets
+        `bank_connection.status = EXPIRED`, and reports that in the response body, so the
+        cron trigger needs no special-cased error handling (same "any failure this run
+        degrades to a safe no-op" shape as the classify job). Recovery is only through the
+        user re-initiating consent via `POST /bank/consent` — never automatic.
+      operationId: runBankSync
+      responses:
+        "200":
+          description: Sync outcome (see BankSyncResult — status EXPIRED means a graceful no-op this run).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankSyncResponse"
+
 components:
   responses:
     BadRequest:
@@ -502,11 +698,16 @@ components:
 
     ReceiptStatus:
       type: string
-      enum: [PENDING, PROCESSING, PROCESSED, FAILED]
+      enum: [PENDING, PROCESSING, PROCESSED, FAILED, NEEDS_CATEGORY_REVIEW]
+      description: |
+        `NEEDS_CATEGORY_REVIEW` is design-only (ADR-007, not implemented) and reachable only
+        by `BANK_IMPORT` receipts — see docs/architecture/06-bank-integration.md.
 
     ReceiptSource:
       type: string
-      enum: [CAMERA, MANUAL]
+      enum: [CAMERA, MANUAL, BANK_IMPORT]
+      description: |
+        `BANK_IMPORT` is design-only (ADR-007, not implemented) — no endpoint returns it yet.
 
     SpendCategory:
       type: string
@@ -593,8 +794,23 @@ components:
         capturedAt: { type: string, format: date-time }
         storeName: { type: string, nullable: true, maxLength: 200 }
         totalAmount: { type: number, format: double, description: "Derived — SUM of this receipt's line items." }
-        imageUrl: { type: string, nullable: true, description: "Relative URL, e.g. /api/receipts/42/image. Null for MANUAL receipts." }
+        imageUrl: { type: string, nullable: true, description: "Relative URL, e.g. /api/receipts/42/image. Null for MANUAL and BANK_IMPORT receipts." }
         failureReason: { type: string, nullable: true }
+        bankTransactionTitle:
+          type: string
+          nullable: true
+          description: |
+            Design-only (ADR-007, not implemented). The bank's free-text transfer/purchase
+            title — set only for BANK_IMPORT receipts.
+        bankTransactionAmount:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            Design-only (ADR-007, not implemented). The amount PKO reported for this
+            transaction, known from the moment of import — distinct from `totalAmount`,
+            which stays 0 until this receipt's single line item is created (by
+            classification or by PUT /receipts/{id}/category). Set only for BANK_IMPORT.
         createdAt: { type: string, format: date-time, readOnly: true }
 
     ReceiptDetail:
@@ -647,9 +863,19 @@ components:
 
     PendingReceiptRef:
       type: object
-      required: [id]
+      required: [id, source]
+      description: |
+        `source = CAMERA` uses only `id` — classify-receipts.sh fetches the image
+        separately via GET /receipts/{id}/image. The remaining fields are design-only
+        (ADR-007, not implemented): `source = BANK_IMPORT` populates them inline instead,
+        since there is no image to fetch — see docs/architecture/06-bank-integration.md.
       properties:
         id: { type: integer, format: int64 }
+        source: { $ref: "#/components/schemas/ReceiptSource" }
+        counterpartyName: { type: string, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007)." }
+        transactionTitle: { type: string, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007)." }
+        amount: { type: number, format: double, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007) — the known bank_transaction_amount." }
+        capturedAt: { type: string, format: date, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007)." }
 
     PendingReceiptsResponse:
       type: object
@@ -680,9 +906,21 @@ components:
         receiptId: { type: integer, format: int64 }
         reason: { type: string, description: "Free text from the classifier, e.g. \"photo too blurry to read any line items\"." }
 
+    ClassificationBatchUncertain:
+      type: object
+      required: [receiptId]
+      description: |
+        Design-only (ADR-007, not implemented). A BANK_IMPORT receipt id Claude wasn't
+        confident enough to assign one of the 11 categories to — never valid for a CAMERA
+        id, whose existing "always guess" policy is unchanged. Routes the receipt to
+        NEEDS_CATEGORY_REVIEW instead of forcing a guess.
+      properties:
+        receiptId: { type: integer, format: int64 }
+        reason: { type: string, nullable: true, description: "Free text, e.g. \"transaction title too generic to infer a category confidently\"." }
+
     ClassificationBatchRequest:
       type: object
-      required: [items, failures]
+      required: [items, failures, uncertainCategory]
       description: This is exactly the raw JSON object the `claude -p` invocation emits (see infra/classify/prompt.md) — the wrapper script forwards it unchanged.
       properties:
         items:
@@ -691,6 +929,10 @@ components:
         failures:
           type: array
           items: { $ref: "#/components/schemas/ClassificationBatchFailure" }
+        uncertainCategory:
+          type: array
+          description: Design-only (ADR-007, not implemented) — see ClassificationBatchUncertain.
+          items: { $ref: "#/components/schemas/ClassificationBatchUncertain" }
 
     ClassificationBatchSkip:
       type: object
@@ -701,7 +943,7 @@ components:
 
     ClassificationBatchResult:
       type: object
-      required: [processed, failed, skipped]
+      required: [processed, failed, skipped, needsCategoryReview]
       properties:
         processed:
           type: array
@@ -711,10 +953,17 @@ components:
           type: array
           items: { type: integer, format: int64 }
           description: Receipt ids transitioned to FAILED (from `failures[]`, or from an invalid category caught server-side).
+        needsCategoryReview:
+          type: array
+          items: { type: integer, format: int64 }
+          description: |
+            Design-only (ADR-007, not implemented). Receipt ids transitioned to
+            NEEDS_CATEGORY_REVIEW (from `uncertainCategory[]`) — awaiting
+            PUT /receipts/{id}/category.
         skipped:
           type: array
           items: { $ref: "#/components/schemas/ClassificationBatchSkip" }
-          description: Entries that referenced an unknown receiptId — left untouched, reported here rather than aborting the request.
+          description: Entries that referenced an unknown receiptId (or, design-only per ADR-007, an uncertainCategory entry naming a non-BANK_IMPORT receipt) — left untouched, reported here rather than aborting the request.
 
     ClassificationBatchResponse:
       type: object
@@ -732,6 +981,15 @@ components:
           type: boolean
           default: false
           description: Required to reset a PROCESSED or PROCESSING receipt back to PENDING; not needed for FAILED.
+
+    # ---- Manual category assignment (design-only, ADR-007) ----
+
+    AssignCategoryRequest:
+      type: object
+      required: [category]
+      description: Design-only (ADR-007, not implemented). Body for PUT /receipts/{id}/category.
+      properties:
+        category: { $ref: "#/components/schemas/SpendCategory" }
 
     # ---- Spending aggregates ----
 
@@ -784,4 +1042,80 @@ components:
       required: [data, meta]
       properties:
         data: { $ref: "#/components/schemas/SpendingTrendData" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ============================================================================
+    # Bank integration (PKO BP PSD2) — DESIGN-ONLY, ADR-007. Not implemented.
+    # See docs/architecture/06-bank-integration.md.
+    # ============================================================================
+
+    BankConnectionStatus:
+      type: string
+      enum: [DISCONNECTED, PENDING_CONSENT, ACTIVE, EXPIRED, ERROR]
+      description: |
+        Design-only (ADR-007, not implemented). EXPIRED means the ~90-day SCA
+        re-authentication window (exact PKO figure TBD) has lapsed, or PKO revoked the
+        consent — recoverable only by the user re-initiating POST /bank/consent, never
+        automatically.
+
+    BankConnection:
+      type: object
+      required: [status]
+      description: Design-only (ADR-007, not implemented). Never includes raw token values.
+      properties:
+        status: { $ref: "#/components/schemas/BankConnectionStatus" }
+        provider: { type: string, example: "PKO_BP" }
+        consentExpiresAt: { type: string, format: date-time, nullable: true }
+        lastSyncedAt: { type: string, format: date-time, nullable: true }
+        lastSyncError: { type: string, nullable: true }
+
+    BankConnectionResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/BankConnection" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    InitiateBankConsentResult:
+      type: object
+      required: [redirectUrl, state]
+      description: Design-only (ADR-007, not implemented).
+      properties:
+        redirectUrl:
+          type: string
+          description: PKO's OAuth2/SCA authorization URL — the PWA navigates the browser here.
+        state:
+          type: string
+          description: Opaque anti-CSRF value echoed back by PKO on the callback.
+
+    InitiateBankConsentResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/InitiateBankConsentResult" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    BankSyncResult:
+      type: object
+      required: [status, fetched, imported, discardedDuplicate, alreadyImported, accountsSynced, errors]
+      description: |
+        Design-only (ADR-007, not implemented). status = EXPIRED means this run made zero
+        writes to receipts/bank_transaction_log — a graceful no-op, not an error response.
+      properties:
+        status: { $ref: "#/components/schemas/BankConnectionStatus" }
+        fetched: { type: integer, description: "Total transactions fetched from PKO this run." }
+        imported: { type: integer, description: "New BANK_IMPORT receipts created (PENDING)." }
+        discardedDuplicate: { type: integer, description: "Confidently matched an existing receipt — silently dropped, logged only." }
+        alreadyImported: { type: integer, description: "external_transaction_id already seen in a prior run — idempotent skip." }
+        accountsSynced: { type: integer }
+        errors:
+          type: array
+          items: { type: string }
+          description: Per-account transient errors that did not abort the run.
+
+    BankSyncResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/BankSyncResult" }
         meta: { $ref: "#/components/schemas/Meta" }

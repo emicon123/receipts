@@ -35,8 +35,8 @@ truth; do not duplicate/redefine it elsewhere, reference it.
 | `JEDZENIE_KONIECZNE` | Jedzenie konieczne | Healthy food | Nutritionally healthy items (vegetables, fruit, lean meat, dairy, eggs, whole grains). Judged by **nutritional quality**, not by whether it's a "staple." |
 | `JEDZENIE_SREDNIE` | Jedzenie średnie | Neutral food | Normal groceries that are neither clearly healthy nor clearly unhealthy (pasta, sauces, bread, frozen dinners, cheese, etc.). |
 | `JEDZENIE_PIERDOLOWATE` | Jedzenie pierdołowate | Unhealthy food | Chips, candy, soda, sweets, fried snacks, fast food — nutritionally poor by design. |
-| `RZECZY_PALIWO_INNE_ROZNE` | Rzeczy/paliwo/inne/różne | General things, fuel, misc | Car gasoline (the **only** fuel type tracked — propane/heating/other fuel-like purchases fall in this same bucket, not split out), plus any other non-luxury, non-categorized purchase — everyday "stuff." |
-| `RZECZY_LUKSUSOWE` | Rzeczy luksusowe | Luxury items | Non-essential purchases by **purpose**, regardless of price: hobby items, gadgets, indulgences — things you could live without. |
+| `RZECZY_PALIWO_INNE_ROZNE` | Rzeczy/paliwo/inne/różne | General things, fuel, misc | Car gasoline (the **only** fuel type tracked — propane/heating/other fuel-like purchases fall in this same bucket, not split out), plus any other purchase where both timing and tier were non-discretionary — see two-part test below. Car repairs, doctor visits, and similar compelled expenses land here regardless of price. |
+| `RZECZY_LUKSUSOWE` | Rzeczy luksusowe | Luxury items | Non-essential purchases by **purpose**, regardless of price: hobby items, gadgets, indulgences — things you could live without. Also **any purchase with a discretionary element on timing or tier** (see two-part test below) — when in doubt, classify as luxury rather than accept a comfort/health justification at face value. |
 | `MYCIE_CHEMIA` | Mycie/chemia | Cleaning & chemicals | Cleaning products, detergents, household chemicals. |
 | `ROZRYWKA_RESTAURACJE` | Rozrywka/restauracje | Entertainment & dining out | Restaurants, cafes, cinema, other paid entertainment. |
 | `RACHUNKI` | Rachunki | Bills | Utility/subscription bills. These usually won't come from a shopping-receipt photo — see manual entry note below. |
@@ -46,7 +46,7 @@ truth; do not duplicate/redefine it elsewhere, reference it.
 Notes for whoever builds the Claude classification prompt (backend) or category pickers (frontend):
 - A single receipt almost always spans **multiple** categories — categorize per line item, not per receipt.
 - Food-tier split (`JEDZENIE_*`) is a **health/nutrition judgment**, not a "how basic is this item" judgment.
-- Luxury vs. general/misc (`RZECZY_LUKSUSOWE` vs `RZECZY_PALIWO_INNE_ROZNE`) is a **purpose** judgment (non-essential/hobby/indulgence vs. everyday necessity), not a price threshold.
+- Luxury vs. general/misc (`RZECZY_LUKSUSOWE` vs `RZECZY_PALIWO_INNE_ROZNE`) is a **purpose** judgment, not a price threshold. There is deliberately **no split-category support** — every line item gets exactly one category — so use this two-part test, and lean luxury whenever either part is discretionary: (1) **timing** — was replacement forced (old item genuinely failing/inadequate), or discretionary (still works, just aging or you wanted a change)? (2) **tier** — was the specific item bought the one that does the job, or a premium upgrade over that? Both parts must be non-discretionary for `RZECZY_PALIWO_INNE_ROZNE`; either being discretionary means `RZECZY_LUKSUSOWE`. Example: replacing a mattress that's merely old but still sleepable, with a nicer one "for your health," is luxury on both counts — the underlying need (owning *a* bed) is real, but neither the timing nor the tier of *this* purchase was forced, and the health framing doesn't change that.
 - `RACHUNKI` implies the app needs a **manual entry path** (no photo) alongside camera capture — see the API's `/api/receipts/manual` endpoint in the architect's OpenAPI spec.
 
 ## Hard constraints (these shape every decision)
@@ -68,6 +68,43 @@ Notes for whoever builds the Claude classification prompt (backend) or category 
   `## Daily classification job` below. It is already installed and authenticated on this
   Raspberry Pi (this very session runs on it), so there is nothing to provision beyond a cron
   entry and the wrapper script + prompt template it runs.
+
+## Tech stack (canonical source of truth for versions)
+
+Agents should read stack/version info from here rather than hardcoding their own copies — this
+keeps the Architect tech-agnostic (it needs to know *what* the stack is to design compatible
+contracts, but shouldn't carry its own drifting copy of version numbers) while Backend/Frontend/
+DevOps still own the *detailed* conventions for their piece (architecture rules, gotchas, testing
+patterns) in their own agent files.
+
+| Layer | Technology | Version |
+|---|---|---|
+| Backend language/runtime | Java | 25 LTS |
+| Backend framework | Spring Boot | 3.5.x |
+| Build tool | Maven | 3.9.x |
+| ORM | Spring Data JPA + Hibernate | Boot-managed |
+| Database | PostgreSQL | 17 |
+| DB driver | PostgreSQL JDBC | 42.x |
+| Schema migrations | Flyway | v10.x |
+| DTO mapping | MapStruct | 1.6.x |
+| Boilerplate reduction | Lombok | 1.18.x |
+| API docs | springdoc-openapi | v2.x |
+| Backend testing | JUnit 5 + Mockito + Testcontainers | Boot-managed / 1.x |
+| Frontend framework | React | 19.x |
+| Frontend language | TypeScript | 5.x (strict mode) |
+| Frontend build tool | Vite | 6.x |
+| PWA plugin | vite-plugin-pwa | latest |
+| Styling | Tailwind CSS | v4.x |
+| UI components | shadcn/ui | latest |
+| Server state | TanStack Query | v5.x |
+| Charts | Recharts | v2.x |
+| Validation | Zod | v3.x |
+| HTTP client | Axios | v1.x |
+| Date handling | date-fns | v4.x |
+| Frontend runtime | Node.js | 22 LTS |
+| Containerization | Docker Engine + docker-compose v2 | latest stable |
+| Reverse proxy | Nginx | alpine (latest stable) |
+| Classifier | Claude Code CLI (headless `claude -p`) | already installed/authenticated on the RPi — no API key |
 
 ## Agent orchestration
 

@@ -20,7 +20,7 @@ const DashboardRoute = lazy(() =>
 );
 
 function RouteFallback() {
-  return <p className="p-4 text-center text-sm text-muted-foreground">Loading…</p>;
+  return <p className="p-4 text-center text-sm text-muted-foreground">Ładowanie…</p>;
 }
 
 export function App() {

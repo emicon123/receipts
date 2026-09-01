@@ -17,7 +17,9 @@ source tree with a bundler step, don't produce diagrams for trivial changes.
   investing-app's split-source-tree + bundler pattern would be over-engineering here)
 - `backend/src/main/resources/db/migration/V1__init.sql` — initial Flyway migration
 - `docs/adr/` — Architecture Decision Records (one file per decision; transient — see Documentation Conventions below)
-- `docs/architecture/` — the living architecture docs; this is where decisions ultimately live
+- `docs/architecture/` — the living architecture docs; this is where decisions ultimately live.
+  `00-overview.md` is the entry point/index — keep its map table in sync whenever you add or
+  retire a numbered doc.
 - `infra/classify/prompt.md` — the static prompt template `infra/classify/classify-receipts.sh`
   (DevOps-owned wrapper script) feeds to a headless `claude -p` invocation once a day. This is a
   contract file exactly like the OpenAPI spec, following the same pattern as investing-app's
@@ -26,17 +28,37 @@ source tree with a bundler step, don't produce diagrams for trivial changes.
   endpoints the script calls before/after the invocation. **Claude itself never calls the
   backend** — the script does all HTTP I/O; the prompt only needs to teach Claude how to read
   receipt images and emit the right JSON.
-- Mermaid diagrams (inline in `docs/architecture/*.md`) for anything non-trivial: the receipt
-  lifecycle state machine, and the capture → upload → daily-classification → correction sequence
+- Mermaid diagrams (inline in `docs/architecture/*.md`) covering, at minimum, the domain/service
+  **class structure**, the receipt lifecycle, the core request/job flows, the DB schema, and the
+  main user journeys — see Documentation conventions below for which diagram type covers each.
+  These diagrams are the deliverable a developer implements *from* — a Backend/Frontend agent
+  should be able to read the class diagram and write code without re-deriving which pattern or
+  SOLID principle applies; that decision is made here, once, and recorded in the diagram's legend.
 
 ## Documentation conventions
 
-**Diagram what benefits from it, in Mermaid** — not everything needs one for an app this size:
+**The diagram-type menu lives in the `software-design-excellence` skill's §2 — don't maintain a
+second, narrower copy here.** Load the skill at task start (see Design principles below); it
+specifies which Mermaid diagram type covers which concern, and requires a legend on each diagram
+stating which patterns/principles it applies and why. For this app, that menu maps to:
+- `classDiagram` — domain entities, DTOs, services, mappers, repositories; this is the one
+  developers implement directly from, so it must carry the pattern-annotation legend
 - `erDiagram` for the DB schema
 - `stateDiagram-v2` for the receipt status lifecycle (`PENDING → PROCESSING → PROCESSED | FAILED`)
 - `sequenceDiagram` for the capture→upload→classify→correct flow, and for the retry-on-quota-exhaustion path
+- use-case `flowchart` for the core user journeys (capture a receipt, correct a category, review monthly spend)
 
-Never hand-draw ASCII boxes for something Mermaid renders properly.
+Skip only what's genuinely trivial for a change this size — not everything needs every diagram
+type. Never hand-draw ASCII boxes for something Mermaid renders properly.
+
+**Extend an existing doc's diagrams in place; don't fork a competing copy.** A feature that
+extends an *existing* concern (e.g. new entities on the domain model, a new status value on the
+lifecycle) updates that concern's diagram directly in its numbered doc. A feature that is still
+**design-only** (not yet implemented) instead gets its own numbered doc, with a short
+forward-pointer note added to whichever existing docs it will eventually touch — this is exactly
+what `06-bank-integration.md` does today, noted inline in `03` and `04` rather than merged into
+their diagrams. Once that work is actually implemented, fold its diagrams into the existing docs
+and remove the forward-pointer notes. Update `00-overview.md`'s status column to match.
 
 **Consume ADRs into the architecture docs — don't let them pile up as the permanent record.**
 An ADR (`docs/adr/{id}-{slug}.md`) is a scratchpad for capturing a decision at the moment it's
@@ -49,9 +71,13 @@ made — context, alternatives, trade-offs. It is not where that decision lives 
 
 ## Design principles & pattern toolbox
 
-> At task start, load the `software-design-excellence` skill — authoritative source for Clean
-> Code, SOLID/DRY/YAGNI, Law of Demeter, GoF/PoSA patterns, and architecture styles. This
-> section is the quick reminder; the skill's references are the detail.
+> **Load the `software-design-excellence` skill at task start and follow it as written — this is
+> a required gate, not optional background reading.** Its §1 Evaluate (pattern/principle
+> selection) and §2 Diagram (UML-first) must both happen before delegating to Backend/Frontend:
+> **no delegation without committed diagrams.** The skill's own words: "Architect evaluates
+> patterns → commits UML → delegates; Developers read UML → implement with Clean Code → verify
+> via checklists." That handoff is the whole point — it's how a developer avoids re-deriving
+> class structure/pattern choices themselves.
 
 Before drawing any diagram, evaluate which patterns/principles apply and justify the choice (or
 the decision to use none) — YAGNI/KISS is the tie-breaker; this app has ~5 endpoints, don't
@@ -61,13 +87,17 @@ reach for enterprise patterns it doesn't need.
 
 ## Stack context
 
-- **Backend:** Java 25, Spring Boot 3.5, Maven, PostgreSQL 17, Flyway v10
-- **Client:** a single React 19 PWA (no native app, no second client) — see `frontend.md`
-- **Classifier:** the Claude Code CLI itself, invoked headlessly via cron, one batched
-  invocation per run — not an embedded Anthropic SDK integration, and not per-item invocations.
-  See CLAUDE.md § Daily classification job before designing anything here; it changes what
-  Backend needs to expose (a batch-submission endpoint a wrapper script calls, not a vision HTTP
-  client to write).
+The current stack (languages, frameworks, versions) is defined once in `CLAUDE.md § Tech stack`
+— read it there rather than hardcoding or assuming versions here. This agent's job is contract
+design (schema, API shape, prompt I/O), which should stay valid across stack changes; leave the
+per-technology conventions to Backend/Frontend/DevOps, who each own their own stack's details.
+
+Design-relevant facts that hold regardless of stack choice:
+- **Single client** — one PWA, no native app, no second client (see `frontend.md`).
+- **Classifier is a headless CLI batch job**, not an embedded API integration — one batched
+  invocation per run, never per-item. See CLAUDE.md § Daily classification job before designing
+  anything here; it changes what Backend needs to expose (a batch-submission endpoint a wrapper
+  script calls, not a vision HTTP client to write).
 
 ## Monorepo layout
 

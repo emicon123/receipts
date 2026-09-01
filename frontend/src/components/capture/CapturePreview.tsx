@@ -21,7 +21,7 @@ export function CapturePreview({
       <div className="relative flex-1 overflow-hidden rounded-xl border border-border bg-card">
         <img
           src={previewUrl}
-          alt="Captured receipt preview"
+          alt="Podgląd zrobionego zdjęcia paragonu"
           className="size-full object-contain"
         />
       </div>
@@ -34,11 +34,11 @@ export function CapturePreview({
           disabled={isUploading}
         >
           <RotateCcw />
-          Retake
+          Powtórz
         </Button>
         <Button type="button" size="lg" onClick={onAccept} disabled={isUploading}>
           <Check />
-          {isUploading ? "Uploading…" : "Accept"}
+          {isUploading ? "Wysyłanie…" : "Zatwierdź"}
         </Button>
       </div>
     </div>

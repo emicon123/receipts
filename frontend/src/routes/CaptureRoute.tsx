@@ -54,13 +54,13 @@ export function CaptureRoute() {
   }
 
   return (
-    <AppShell title="Capture receipt">
+    <AppShell title="Zrób zdjęcie paragonu">
       <div className="flex min-h-full flex-col gap-4">
         {upload.isError && (
           <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {upload.error instanceof ApiError
               ? upload.error.message
-              : "Upload failed. Please try again."}
+              : "Wysyłanie nie powiodło się. Spróbuj ponownie."}
           </p>
         )}
 
@@ -74,10 +74,10 @@ export function CaptureRoute() {
         ) : (
           <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
             <div>
-              <p className="text-lg font-semibold">Photograph a receipt</p>
+              <p className="text-lg font-semibold">Zrób zdjęcie paragonu</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Tap the button, take a clear photo of the whole receipt, then confirm it looks
-                right before it uploads.
+                Dotknij przycisku, zrób wyraźne zdjęcie całego paragonu i potwierdź, że wygląda
+                dobrze, zanim zostanie wysłane.
               </p>
             </div>
             <Button
@@ -85,7 +85,7 @@ export function CaptureRoute() {
               size="icon"
               className="size-28 rounded-full [&_svg]:size-11"
               onClick={() => inputRef.current?.click()}
-              aria-label="Open camera to capture a receipt"
+              aria-label="Otwórz aparat, aby zrobić zdjęcie paragonu"
             >
               <Camera />
             </Button>

@@ -51,7 +51,7 @@ apiClient.interceptors.response.use(
   (error: AxiosError<ErrorResponse>) => {
     const errors = error.response?.data?.errors ?? [];
     const message =
-      errors[0]?.message ?? error.message ?? "Unexpected network error";
+      errors[0]?.message ?? error.message ?? "Nieoczekiwany błąd sieci";
     return Promise.reject(new ApiError(message, error.response?.status, errors));
   },
 );

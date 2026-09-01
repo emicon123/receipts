@@ -8,10 +8,10 @@ import { useReceipts } from "@/hooks/useReceipts";
 import type { ReceiptStatus } from "@/lib/types";
 
 const STATUS_TABS: { value: string; label: string }[] = [
-  { value: "ALL", label: "All" },
-  { value: "PENDING", label: "Pending" },
-  { value: "PROCESSED", label: "Processed" },
-  { value: "FAILED", label: "Failed" },
+  { value: "ALL", label: "Wszystkie" },
+  { value: "PENDING", label: "Oczekujące" },
+  { value: "PROCESSED", label: "Gotowe" },
+  { value: "FAILED", label: "Błędy" },
 ];
 
 const PAGE_SIZE = 20;
@@ -35,7 +35,7 @@ export function ReceiptsListRoute() {
   const totalPages = data ? Math.max(1, Math.ceil(data.page.total / data.page.size)) : 1;
 
   return (
-    <AppShell title="Receipts">
+    <AppShell title="Paragony">
       <div className="flex flex-col gap-4">
         <Tabs value={statusFilter} onValueChange={handleStatusChange}>
           <TabsList className="w-full">
@@ -49,15 +49,15 @@ export function ReceiptsListRoute() {
 
         {isError && (
           <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            Couldn't load receipts. Pull to refresh or try again shortly.
+            Nie udało się wczytać paragonów. Odśwież lub spróbuj ponownie.
           </p>
         )}
 
-        {isPending && <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>}
+        {isPending && <p className="py-8 text-center text-sm text-muted-foreground">Ładowanie…</p>}
 
         {data && data.data.length === 0 && (
           <p className="py-8 text-center text-sm text-muted-foreground">
-            No receipts yet in this view.
+            Brak paragonów w tym widoku.
           </p>
         )}
 
@@ -77,10 +77,10 @@ export function ReceiptsListRoute() {
               disabled={page === 0}
             >
               <ChevronLeft />
-              Prev
+              Poprz.
             </Button>
             <span className="text-sm text-muted-foreground">
-              Page {page + 1} of {totalPages}
+              Strona {page + 1} z {totalPages}
             </span>
             <Button
               type="button"
@@ -89,7 +89,7 @@ export function ReceiptsListRoute() {
               onClick={() => setPage((p) => p + 1)}
               disabled={isPlaceholderData || page + 1 >= totalPages}
             >
-              Next
+              Nast.
               <ChevronRight />
             </Button>
           </div>

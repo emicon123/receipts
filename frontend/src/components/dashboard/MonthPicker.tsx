@@ -16,11 +16,11 @@ export function MonthPicker({ year, month, onChange }: MonthPickerProps) {
 
   return (
     <div className="flex items-center justify-between">
-      <Button type="button" variant="outline" size="icon" onClick={() => shift(-1)} aria-label="Previous month">
+      <Button type="button" variant="outline" size="icon" onClick={() => shift(-1)} aria-label="Poprzedni miesiąc">
         <ChevronLeft />
       </Button>
       <p className="text-sm font-semibold capitalize">{formatMonthLong(year, month)}</p>
-      <Button type="button" variant="outline" size="icon" onClick={() => shift(1)} aria-label="Next month">
+      <Button type="button" variant="outline" size="icon" onClick={() => shift(1)} aria-label="Następny miesiąc">
         <ChevronRight />
       </Button>
     </div>

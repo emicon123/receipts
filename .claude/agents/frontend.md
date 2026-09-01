@@ -161,9 +161,13 @@ frontend/
 
 ## Architecture docs — read before implementing
 
-Read `docs/openapi.yaml` and the relevant `docs/architecture/*.md` before implementing — these
-specify current, authoritative request/response shapes. Flag any mismatch between docs and code
-as a blocker rather than silently picking a side.
+Start at `docs/architecture/00-overview.md` — it's the index; it says which numbered doc covers
+what and its status (implemented vs. design-only). Then read `docs/openapi.yaml` and the relevant
+`docs/architecture/*.md` before implementing — these specify current, authoritative request/
+response shapes, and the `classDiagram` in the domain-model doc records the component/service
+structure and pattern choices the architect already made (legend explains why). Implement from
+it rather than re-deriving structure independently. Flag any mismatch between docs and code as a
+blocker rather than silently picking a side.
 
 ## Gotchas
 

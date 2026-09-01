@@ -58,21 +58,21 @@ export function LineItemRow({ item, categories, onSave, isSaving }: LineItemRowP
           value={productName}
           onChange={(e) => setProductName(e.target.value)}
           onBlur={commitProductName}
-          aria-label="Product name"
+          aria-label="Nazwa produktu"
           className="h-9 flex-1"
           disabled={isSaving}
         />
         {item.corrected && (
           <span className="mt-1 flex shrink-0 items-center gap-1 text-xs font-medium text-muted-foreground">
             <PencilLine className="size-3" />
-            edited
+            poprawione
           </span>
         )}
       </div>
 
       <div className="flex items-center gap-2">
         <Select value={item.category} onValueChange={handleCategoryChange} disabled={isSaving}>
-          <SelectTrigger className="h-9 flex-1 text-sm" aria-label="Category">
+          <SelectTrigger className="h-9 flex-1 text-sm" aria-label="Kategoria">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -93,7 +93,7 @@ export function LineItemRow({ item, categories, onSave, isSaving }: LineItemRowP
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             onBlur={commitAmount}
-            aria-label="Amount"
+            aria-label="Kwota"
             className="h-9 w-24 text-right tabular-nums"
             disabled={isSaving}
           />
