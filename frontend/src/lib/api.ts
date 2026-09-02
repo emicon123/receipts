@@ -74,6 +74,13 @@ export async function getCategories(): Promise<CategoryInfo[]> {
   return data.data;
 }
 
+// ---- Store-name suggestions ----
+
+export async function getStoreNameSuggestions(): Promise<string[]> {
+  const { data } = await apiClient.get<Envelope<string[]>>("/receipts/store-names");
+  return data.data;
+}
+
 // ---- Receipts ----
 
 export async function listReceipts(

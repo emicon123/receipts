@@ -113,13 +113,65 @@ CREATE TYPE spend_category_enum AS ENUM (
   aggregate over a single user's receipts — low thousands of rows at the outside — so a
   sequential scan on an occasional dashboard page view is cheap. Adding one would be pure YAGNI
   overhead at this data scale.
+- **Deliberately no index on `receipts.store_name` either**, for the same reason — see below.
+
+## Store-Name Suggestions (`GET /receipts/store-names`)
+
+Backs the manual-entry form's "Sklep / dostawca" combobox with "most used / last used"
+autocomplete suggestions, drawn from `receipts.store_name` across **every** receipt — any
+`status`, any `source` (`CAMERA` and `MANUAL` both write this field today; `BANK_IMPORT` will
+too once `06-bank-integration.md` lands — see that doc's note on `store_name` reuse). Full
+endpoint contract in `docs/openapi.yaml`; ranking rationale in ADR-009. This section fixes the
+exact query shape so Backend doesn't have to re-derive it.
+
+1. **Filter:** exclude rows where `store_name IS NULL` or `trim(store_name) = ''`.
+2. **Normalize for dedup:** group by `lower(trim(store_name))`.
+3. **Rank groups:** `COUNT(*) DESC` (usage — the primary axis), then `MAX(captured_at) DESC`
+   (recency — the tiebreak). Take the top 20 groups.
+4. **Pick display casing per group:** within the group, the exact-cased `store_name` variant
+   with the highest occurrence count, tie-broken by that variant's own `MAX(captured_at) DESC`.
+
+Sketch (Postgres; Backend may implement as JPQL/native query, this is the shape, not a mandated
+literal query):
+
+```sql
+WITH normalized AS (
+  SELECT store_name, lower(trim(store_name)) AS norm_key, captured_at
+  FROM receipts
+  WHERE store_name IS NOT NULL AND trim(store_name) <> ''
+),
+casing_counts AS (
+  SELECT norm_key, store_name, COUNT(*) AS casing_count, MAX(captured_at) AS casing_last_used
+  FROM normalized
+  GROUP BY norm_key, store_name
+),
+best_casing AS (
+  SELECT DISTINCT ON (norm_key) norm_key, store_name AS display_name
+  FROM casing_counts
+  ORDER BY norm_key, casing_count DESC, casing_last_used DESC
+),
+groups AS (
+  SELECT norm_key, COUNT(*) AS usage_count, MAX(captured_at) AS last_used_at
+  FROM normalized
+  GROUP BY norm_key
+)
+SELECT b.display_name
+FROM groups g JOIN best_casing b USING (norm_key)
+ORDER BY g.usage_count DESC, g.last_used_at DESC
+LIMIT 20;
+```
+
+**No new index.** Same reasoning as skipping an index on `receipt_line_items.category`: a
+personal single-user dataset stays in the low thousands of `receipts` rows, this endpoint is an
+occasional autocomplete-populating call (not a hot path), and a sequential scan + in-memory
+`GROUP BY` over that volume is cheap. Revisit only if the dataset's scale assumption changes.
 
 ---
 
 ## Pattern & Principle Evaluation
 
 Per the `software-design-excellence` skill's §1 Evaluate step — recorded once here rather than
-repeated per endpoint, since the same reasoning applies uniformly across this app's ~13-endpoint,
+repeated per endpoint, since the same reasoning applies uniformly across this app's ~14-endpoint,
 2-table surface.
 
 | Candidate | Verdict | Why |
@@ -133,6 +185,7 @@ repeated per endpoint, since the same reasoning applies uniformly across this ap
 | GoF Factory | **rejected** | Two receipt creation paths (camera upload, manual entry) differ by a handful of fields, not by construction complexity; a constructor/builder per path is enough. |
 | CQRS | **rejected** | Read and write models are identical-shape DTOs over 2 tables; splitting them buys nothing at this scale. |
 | Specification pattern (query filters) | **rejected** | 3 optional filters (`year`/`month`/`status`) map directly to a Spring Data JPA query method or a small JPQL query — a Specification/Criteria abstraction is overkill. |
+| Materialized view / cache for `GET /receipts/store-names` | **rejected** | Considered, since it's a GROUP BY/aggregate query. Rejected: low-thousands-row table, called only when the manual-entry form opens (not a hot path) — a live aggregate query is cheap enough that a cache/materialized view would be YAGNI, and would add a staleness problem (a store name used seconds ago should be suggestible immediately) for no real benefit. |
 | "Claim-and-release" on `GET /pending` (mark `PROCESSING` on fetch) | **rejected** | Considered, to guard `GET /pending` against overlapping cron runs. Rejected: CLAUDE.md's job design already serializes runs (the same-day safety-net slots are sequential, not concurrent), and the "every receipt stays `PENDING` on any failure" rule requires `GET /pending` to be a pure, non-mutating read — see `03-receipt-lifecycle.md` for where `PROCESSING` is actually used instead. |
 
 **Bank-import additions (design-only, ADR-007):** Ports & Adapters for the PSD2 client, and

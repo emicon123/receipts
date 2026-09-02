@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { z } from "zod";
 import { AppShell } from "@/components/layout/AppShell";
+import { StoreNameCombobox } from "@/components/receipts/StoreNameCombobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -120,10 +121,10 @@ export function ManualEntryRoute() {
 
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="storeName">Sklep / dostawca (opcjonalnie)</Label>
-          <Input
+          <StoreNameCombobox
             id="storeName"
             value={storeName}
-            onChange={(e) => setStoreName(e.target.value)}
+            onValueChange={setStoreName}
             placeholder="np. dostawca prądu"
           />
         </div>

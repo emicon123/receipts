@@ -205,7 +205,11 @@ transaction data — so it's omitted from the relationship lines above.
 Note `store_name` is deliberately **reused** for `BANK_IMPORT`'s counterparty name rather than
 adding a parallel column — both mean "who the money went to," and this app already treats
 `storeName` as nullable-until-known on every source. Reusing it avoids two columns with
-near-identical semantics (YAGNI).
+near-identical semantics (YAGNI). One consequence: `GET /receipts/store-names` (see
+`02-domain-model-and-schema.md` § Store-Name Suggestions) already queries `store_name` across
+*all* sources with no `source` filter, so once bank import lands, `BANK_IMPORT` counterparty
+names will start appearing in the manual-entry combobox's suggestions automatically — no backend
+change needed for that endpoint when this feature ships.
 
 ---
 

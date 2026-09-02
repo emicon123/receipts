@@ -43,4 +43,42 @@ public interface ReceiptRepository extends JpaRepository<Receipt, Long> {
                           Pageable pageable);
 
     List<Receipt> findAllByStatusOrderByCapturedAtAsc(ReceiptStatus status);
+
+    /**
+     * Backs GET /receipts/store-names — see docs/architecture/02-domain-model-and-schema.md
+     * § Store-Name Suggestions for the exact rules and ADR-009 for why this ranking was chosen.
+     * No {@code status}/{@code source} filter — every receipt's {@code store_name} counts.
+     *
+     * <p>A native query rather than JPQL: {@code DISTINCT ON} (picking each dedup group's
+     * best-cased display variant) has no JPQL equivalent, and the architect's SQL sketch is
+     * reproduced here near-verbatim rather than re-derived — see that doc for the CTE-by-CTE
+     * rationale (normalize -&gt; count casing variants -&gt; pick display casing -&gt; rank groups).
+     */
+    @Query(value = """
+            WITH normalized AS (
+                SELECT store_name, lower(trim(store_name)) AS norm_key, captured_at
+                FROM receipts
+                WHERE store_name IS NOT NULL AND trim(store_name) <> ''
+            ),
+            casing_counts AS (
+                SELECT norm_key, store_name, COUNT(*) AS casing_count, MAX(captured_at) AS casing_last_used
+                FROM normalized
+                GROUP BY norm_key, store_name
+            ),
+            best_casing AS (
+                SELECT DISTINCT ON (norm_key) norm_key, store_name AS display_name
+                FROM casing_counts
+                ORDER BY norm_key, casing_count DESC, casing_last_used DESC
+            ),
+            groups AS (
+                SELECT norm_key, COUNT(*) AS usage_count, MAX(captured_at) AS last_used_at
+                FROM normalized
+                GROUP BY norm_key
+            )
+            SELECT b.display_name
+            FROM groups g JOIN best_casing b USING (norm_key)
+            ORDER BY g.usage_count DESC, g.last_used_at DESC
+            LIMIT 20
+            """, nativeQuery = true)
+    List<String> findStoreNameSuggestions();
 }

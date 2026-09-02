@@ -26,6 +26,7 @@ import pl.receipts.dto.receipt.ReceiptDetailResponse;
 import pl.receipts.dto.receipt.ReceiptListResponse;
 import pl.receipts.dto.receipt.ReceiptSummaryResponse;
 import pl.receipts.dto.receipt.ReprocessRequest;
+import pl.receipts.dto.receipt.StoreNameSuggestionsResponse;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.service.LineItemCorrectionService;
 import pl.receipts.service.ReceiptService;
@@ -69,6 +70,11 @@ public class ReceiptController {
                                      @RequestParam(defaultValue = "0") @Min(0) int page,
                                      @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return receiptService.list(year, month, status, page, size);
+    }
+
+    @GetMapping("/store-names")
+    public StoreNameSuggestionsResponse storeNameSuggestions() {
+        return receiptService.listStoreNameSuggestions();
     }
 
     @GetMapping("/{id}")

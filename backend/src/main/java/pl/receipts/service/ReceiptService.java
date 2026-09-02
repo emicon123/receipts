@@ -20,6 +20,7 @@ import pl.receipts.dto.receipt.PendingReceiptsResponse;
 import pl.receipts.dto.receipt.ReceiptDetail;
 import pl.receipts.dto.receipt.ReceiptListResponse;
 import pl.receipts.dto.receipt.ReceiptSummary;
+import pl.receipts.dto.receipt.StoreNameSuggestionsResponse;
 import pl.receipts.entity.Receipt;
 import pl.receipts.entity.ReceiptLineItem;
 import pl.receipts.entity.ReceiptStatus;
@@ -123,6 +124,16 @@ public class ReceiptService {
                 .map(r -> new PendingReceiptRef(r.getId()))
                 .toList();
         return new PendingReceiptsResponse(refs);
+    }
+
+    /**
+     * Backs GET /receipts/store-names — an unpaginated, ranked/deduplicated autocomplete list
+     * for the manual-entry form's store combobox. Pure read; no status/source filter (see
+     * ReceiptRepository.findStoreNameSuggestions's Javadoc and ADR-009).
+     */
+    @Transactional(readOnly = true)
+    public StoreNameSuggestionsResponse listStoreNameSuggestions() {
+        return new StoreNameSuggestionsResponse(receiptRepository.findStoreNameSuggestions());
     }
 
     @Transactional
