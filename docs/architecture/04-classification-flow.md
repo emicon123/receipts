@@ -40,15 +40,20 @@ sequenceDiagram
 
     Cron->>Claude: claude -p "<prompt.md + id→path manifest>"<br/>--output-format json --allowedTools Read
     Claude->>Claude: Read each image, extract + categorize line items
-    Claude-->>Cron: {"items": [...], "failures": [...]}
+    Claude-->>Cron: .result — should be raw {"items":[...],"failures":[...]}<br/>but not reliably (ADR-008: fences/preamble observed in prod)
 
-    Cron->>Backend: POST /api/receipts/classification-batch
-    activate Backend
-    Backend->>DB: per items[] entry: PENDING→PROCESSING→PROCESSED<br/>(replace uncorrected line items, recompute total_amount)
-    Backend->>DB: per failures[] entry: PENDING→PROCESSING→FAILED (failure_reason)
-    Backend->>DB: any entry with an invalid category: routed to FAILED too<br/>(server-side reject, never silently coerced)
-    deactivate Backend
-    Backend-->>Cron: 200 { data: { processed, failed, skipped } }
+    Cron->>Cron: Defensively extract JSON from .result (ADR-008):<br/>strip leading/trailing code fence if present,<br/>take substring first "{" .. last "}", validate via `jq empty`
+    alt extraction/validation fails
+        Note over Cron,DB: Treated exactly like is_error:true — log raw .result,<br/>leave all pending receipts PENDING, exit. No POST made.
+    else valid JSON
+        Cron->>Backend: POST /api/receipts/classification-batch
+        activate Backend
+        Backend->>DB: per items[] entry: PENDING→PROCESSING→PROCESSED<br/>(replace uncorrected line items, recompute total_amount)
+        Backend->>DB: per failures[] entry: PENDING→PROCESSING→FAILED (failure_reason)
+        Backend->>DB: any entry with an invalid category: routed to FAILED too<br/>(server-side reject, never silently coerced)
+        deactivate Backend
+        Backend-->>Cron: 200 { data: { processed, failed, skipped } }
+    end
 
     User->>PWA: Open receipt list later
     PWA->>Backend: GET /api/receipts?status=PROCESSED
@@ -72,6 +77,12 @@ Key contract points visible in this flow:
   from either the PWA or the wrapper script — `--allowedTools "Read"` gives Claude nothing else.
 - A correction (`PUT .../line-items/{itemId}`) never re-invokes the classifier and never changes
   `receipts.status` — it's a pure data edit plus a `total_amount` recompute.
+- The script never trusts `.result` as directly POSTable JSON (ADR-008): `claude`'s reply is not
+  reliably raw JSON in practice (markdown fences, or prose Claude adds when a tool call it
+  attempted was denied by `--allowedTools "Read"`), so the script defensively strips a leading/
+  trailing code fence, extracts the substring from the first `{` to the last `}`, and validates
+  it parses before treating it as the batch. Extraction/validation failure degrades identically
+  to `is_error: true` — log and leave every receipt in the run `PENDING`, no partial submission.
 
 ---
 
@@ -113,6 +124,14 @@ to the backend via one call — `classification-batch`, made strictly after a su
 run — there is no intermediate state to unwind on failure. The next scheduled slot's
 `GET /pending` naturally re-includes every receipt from the failed run, plus anything uploaded
 since, with zero bookkeeping required in the script itself.
+
+This same uniform-degrade principle extends one step further than `is_error: true` (ADR-008): a
+`claude` invocation that exits cleanly can still return a `.result` that isn't the raw JSON it
+was asked for (markdown fences, or apology prose after a denied tool call — both observed in
+production, see `infra/classify/classify-receipts.log`). The script's defensive extraction step
+(see the Happy Path diagram above) treats an extraction/validation failure identically to
+`is_error: true` — no new failure category, no new state to design for, just the same "log and
+leave PENDING" behavior applied one layer deeper.
 
 The primary run is at 06:00 rather than overnight because losing a whole day of classification
 is higher-stakes for this app's core purpose than investing-app's nightly news job losing one
