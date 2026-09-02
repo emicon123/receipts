@@ -46,6 +46,17 @@ export const apiClient: AxiosInstance = axios.create({
   baseURL: `${import.meta.env.BASE_URL}api`,
 });
 
+/**
+ * Resolves a server-root-relative path the backend returns (e.g. receipt.imageUrl =
+ * "/api/receipts/42/image") against this deployment's path prefix — the same BASE_URL
+ * mechanism apiClient's own baseURL uses for JSON calls. Needed anywhere a backend-given
+ * URL is rendered directly as an asset src (img, download link) rather than fetched through
+ * apiClient, since only apiClient's axios baseURL performs this prefixing automatically.
+ */
+export function resolveApiUrl(path: string): string {
+  return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
+}
+
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError<ErrorResponse>) => {
