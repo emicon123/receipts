@@ -15,8 +15,7 @@ spring:
         jdbc:
           time_zone: UTC
   jackson:
-    write:
-      default-property-inclusion: non_absent
+    default-property-inclusion: non_absent
   servlet:
     multipart:
       enabled: true
