@@ -3,6 +3,7 @@ import { pl } from "date-fns/locale";
 import { NotebookPen } from "lucide-react";
 import { Link } from "react-router-dom";
 import { StatusBadge } from "@/components/receipts/StatusBadge";
+import { resolveApiUrl } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 import type { ReceiptSummary } from "@/lib/types";
 
@@ -15,7 +16,7 @@ export function ReceiptCard({ receipt }: { receipt: ReceiptSummary }) {
       <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted">
         {receipt.imageUrl ? (
           <img
-            src={receipt.imageUrl}
+            src={resolveApiUrl(receipt.imageUrl)}
             alt=""
             className="size-full object-cover"
             loading="lazy"

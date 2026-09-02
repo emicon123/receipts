@@ -20,7 +20,7 @@ import { useCorrectLineItem } from "@/hooks/useCorrectLineItem";
 import { useDeleteReceipt } from "@/hooks/useDeleteReceipt";
 import { useReceipt } from "@/hooks/useReceipt";
 import { useReprocessReceipt } from "@/hooks/useReprocessReceipt";
-import { ApiError } from "@/lib/api";
+import { ApiError, resolveApiUrl } from "@/lib/api";
 import { formatCurrency } from "@/lib/utils";
 
 export function ReceiptDetailRoute() {
@@ -79,7 +79,11 @@ export function ReceiptDetailRoute() {
         <div className="flex flex-col gap-4">
           {receipt.imageUrl && (
             <div className="overflow-hidden rounded-xl border border-border bg-card">
-              <img src={receipt.imageUrl} alt="Paragon" className="w-full object-contain" />
+              <img
+                src={resolveApiUrl(receipt.imageUrl)}
+                alt="Paragon"
+                className="w-full object-contain"
+              />
             </div>
           )}
 
