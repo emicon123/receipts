@@ -1,3 +1,20 @@
+## Output contract — read this first
+
+Your entire response must be **one raw JSON object** — fully described in "Output format" below
+— and nothing else: no markdown code fence (no ` ```json ` / ` ``` `), no prose, no apology, no
+commentary before or after it. This is a hard requirement, not a style preference — non-compliant
+output here has already caused real production failures (the batch gets rejected and nothing
+gets classified that run).
+
+You have exactly one tool available: `Read`, for the image files listed in the manifest at the
+end of this prompt. Do not attempt any other tool call — no Bash, no web/network tool, no file
+listing, nothing beyond reading the given image paths. It is never needed, and anything else will
+be denied. If a tool call is ever denied or fails for any reason, do not explain, apologize, or
+narrate about it in your response — silently continue and produce only the JSON output described
+below, covering every id you were given.
+
+---
+
 You are analyzing two kinds of spending records for a personal spending tracker: photographed
 shopping receipts, and bank-transaction summaries (no photo). The manifest at the end of this
 prompt lists both kinds together; **tell them apart by which fields each entry has**, not by
@@ -96,7 +113,29 @@ in a single `lineItems` entry — do not invent or adjust the amount:
 ## Output format
 
 Respond with **ONLY** a single raw JSON object — no markdown code fences, no prose before or
-after it, nothing but the JSON:
+after it, nothing but the JSON. Repeating the point made at the top of this prompt because it is
+the single most common way this job fails in production:
+
+**What NOT to output** — both shapes below have caused real production failures; neither is
+valid, even though the JSON inside is otherwise correct:
+
+~~~
+```json
+{ "items": [...], "failures": [...] }
+```
+~~~
+
+~~~
+Apologies — that tool call was a mistake and unrelated to this task. Here is the
+classification output as plain JSON, per the required format:
+
+```json
+{ "items": [...], "failures": [...] }
+```
+~~~
+
+The only valid response is the raw `{...}` object itself — starting with `{`, ending with `}`,
+nothing before or after it, no code fence wrapping it.
 
 ```json
 {

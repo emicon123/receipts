@@ -133,9 +133,10 @@ This mirrors a pattern already proven in the sibling `investing-app` (its nightl
 job — plain host crontab, static prompt template, wrapper script does all backend I/O, no
 Anthropic API key). Same shape here, at `infra/classify/`:
 
-1. **`infra/classify/classify-receipts.sh`** (host cron, not a container — see DevOps) first
-   calls `GET /api/receipts/pending`. **If it's empty, the script exits immediately** without
-   invoking `claude` at all — no point spending a CLI invocation on an empty queue.
+1. **`infra/classify/classify-receipts.sh`** (host cron, not a container — see DevOps) runs once
+   daily at 06:00 and first calls `GET /api/receipts/pending`. **If it's empty, the script exits
+   immediately** without invoking `claude` at all — no point spending a CLI invocation on an
+   empty queue.
 2. If there are pending receipts, the script downloads each one's image to a temp file, appends
    an `id → local path` manifest to the static template at `infra/classify/prompt.md`, and runs
    **one single** `claude -p "<prompt>" --output-format json --allowedTools "Read"` invocation
@@ -156,11 +157,13 @@ Anthropic API key). Same shape here, at `infra/classify/`:
    content problems Claude itself reports — a blurry/unreadable photo, a receipt it can't parse
    — never for a script/CLI-level failure, which instead just leaves the receipt `PENDING`.
 
-**Deliberate divergence from investing-app's news job:** that job runs once nightly with no
-retry — a missed night is an accepted, low-stakes gap ("tomorrow's news is still there"). Losing
-a day on a receipt is higher-stakes for this app's whole purpose, so — per explicit request —
-DevOps schedules a primary run at **06:00** plus a few extra same-day slots purely as a safety
-net; each extra slot is a cheap no-op unless the primary run actually failed.
+**Same shape as investing-app's news job on scheduling:** both run exactly once daily via host
+crontab — investing-app's news job at 23:00, this job at **06:00** — with no same-day retry
+slots. If the single daily run fails (see step 4), every receipt in that run simply stays
+`PENDING` and is picked up automatically by the next day's 06:00 run — the same accepted,
+low-stakes gap investing-app's news job tolerates ("tomorrow's news is still there"). An earlier
+iteration of this job scheduled extra same-day safety-net slots (10:00/14:00/18:00/22:00); the
+user has since asked for the single 06:00 run only, matching investing-app's cadence.
 
 **No service/M2M auth token** on these endpoints, unlike investing-app's `X-Service-Token` on its
 news-ingest path: that token exists there to distinguish the cron path from the app's normal
