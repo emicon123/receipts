@@ -27,8 +27,18 @@ files — everything lives in `docs/openapi.yaml#/components/schemas`).
 | POST | `/api/receipts/manual` | PWA | No image, direct line-item entry (e.g. `RACHUNKI` bills) → `PROCESSED`/`MANUAL` receipt straight away. Strict `422` validation (this is direct human input). |
 | GET | `/api/receipts` | PWA | Paginated list, filterable by `year`, `month`, `status`, `source`. Default sort `capturedAt` desc. |
 | GET | `/api/receipts/pending` | **classify-receipts.sh** | List of everything `PENDING`. Pure read — never mutates status (see `03-receipt-lifecycle.md`). Unpaginated by design. Lean `{id}` for `CAMERA`; inline transaction fields (no image to fetch) for `BANK_IMPORT` — design-only, ADR-007, see `06-bank-integration.md`. |
+| GET | `/api/receipts/store-names` | PWA (manual-entry combobox) | Ranked, deduplicated `storeName` suggestions across all receipts/sources/statuses. Unpaginated, capped at 20. See `02-domain-model-and-schema.md` § Store-Name Suggestions and ADR-009 for the ranking/dedup rules. |
 | GET | `/api/receipts/{id}` | PWA | Full detail incl. `imageUrl` + line items. |
 | GET | `/api/receipts/{id}/image` | PWA, **classify-receipts.sh** | Raw image bytes. 404 for a `MANUAL`/`BANK_IMPORT` receipt (no image) or unknown id. |
+
+`imageUrl` (on `ReceiptSummary`/`ReceiptDetail`) is a server-root-relative path such as
+`/api/receipts/42/image` — the backend has no notion of the app's `/paragony/` deployment
+prefix and must not bake one in (see CLAUDE.md's "Deployment" section: prefix handling is
+frontend-owned, centralized through `import.meta.env.BASE_URL`, same as `vite.config.ts`'s
+`base` and the router `basename`). Any place the PWA renders `imageUrl` as an asset `src`
+resolves it through that same mechanism rather than using the backend's path verbatim —
+`apiClient`'s own `baseURL` already does this for JSON calls; `resolveApiUrl()` in
+`frontend/src/lib/api.ts` extends the same resolution to non-axios asset URLs like this one.
 | POST | `/api/receipts/classification-batch` | **classify-receipts.sh** | Body is Claude's raw `{items, failures}` output (design-only: gains `uncertainCategory` — ADR-007), forwarded unchanged. Idempotent per receipt; replaces only uncorrected line items; tolerant of an unknown `receiptId` or an out-of-enum `category` per entry (routed to `FAILED`/`skipped`, never a whole-request 400) — see below. |
 | PUT | `/api/receipts/{id}/line-items/{itemId}` | PWA | User correction. Sets `corrected = true`; never touched by a later classification-batch replace. |
 | PUT | `/api/receipts/{id}/category` | PWA | **Design-only, ADR-007.** Resolves a `NEEDS_CATEGORY_REVIEW` (`BANK_IMPORT`-only) receipt by hand — creates its single line item, `corrected = true` immediately. Not reachable via `reprocess`. |

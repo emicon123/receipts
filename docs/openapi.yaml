@@ -24,7 +24,7 @@ info:
 
     This mirrors `investing-app`'s convention exactly (see that repo's
     `docs/openapi/components/schemas/common.yaml`), scaled down to a single file since this
-    app's ~13-endpoint surface doesn't justify a split source tree + bundler step.
+    app's ~14-endpoint surface doesn't justify a split source tree + bundler step.
 
     ## Who calls what
 
@@ -207,6 +207,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PendingReceiptsResponse"
+
+  /receipts/store-names:
+    get:
+      tags: [receipts]
+      summary: Ranked store-name suggestions for autocomplete
+      description: |
+        Feeds the manual-entry form's "Sklep / dostawca" combobox (free-text field — every
+        suggestion here is a hint, never a constraint; any value the user types remains
+        acceptable). Draws from `receipts.store_name` across **all** receipts — any `status`,
+        any `source` — since `CAMERA` and `MANUAL` entries share this one field, and a name is
+        worth suggesting again even if that receipt is still `PENDING`/`PROCESSING` or ended up
+        `FAILED`. NULL and blank/whitespace-only values are excluded.
+
+        **Dedup:** case-insensitive, trimmed (`lower(trim(store_name))` as the grouping key) —
+        `"Lidl"`, `"lidl "`, `" LIDL"` collapse into one suggestion. The casing shown for a group
+        is whichever exact-cased variant occurs most often within it, tie-broken by that
+        variant's own most recent `capturedAt`.
+
+        **Ranking:** primarily by usage count (receipts in the group) descending — "most used"
+        — tie-broken by the group's most recent `capturedAt` descending — "last used" as the
+        tiebreak, not the primary axis (a strictly-recency ordering would let a single new,
+        one-off store crowd out genuinely frequent ones). See
+        `docs/architecture/02-domain-model-and-schema.md` § Store-Name Suggestions for the exact
+        query shape and ADR-009 for why this ranking was chosen over frequency-only or
+        recency-only alternatives.
+
+        **Cap:** top 20 results, unpaginated — a personal single-user dataset's realistic set of
+        distinct store names fits comfortably under that, same reasoning as `/receipts/pending`
+        and `/categories` being unpaginated.
+      operationId: listStoreNameSuggestions
+      responses:
+        "200":
+          description: Ranked, deduplicated store names (may be an empty array).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreNameSuggestionsResponse"
 
   /receipts/{id}:
     parameters:
@@ -794,7 +831,7 @@ components:
         capturedAt: { type: string, format: date-time }
         storeName: { type: string, nullable: true, maxLength: 200 }
         totalAmount: { type: number, format: double, description: "Derived — SUM of this receipt's line items." }
-        imageUrl: { type: string, nullable: true, description: "Relative URL, e.g. /api/receipts/42/image. Null for MANUAL and BANK_IMPORT receipts." }
+        imageUrl: { type: string, nullable: true, description: "Server-root-relative path, e.g. /api/receipts/42/image — NOT relative to the current page and NOT prefixed with the app's deployment path. A client rendering this as an asset src (e.g. <img>) is responsible for resolving it against its own deployment prefix (the PWA does this via a shared helper built on import.meta.env.BASE_URL, the same mechanism its own API client's baseURL uses) rather than using it verbatim. Null for MANUAL and BANK_IMPORT receipts." }
         failureReason: { type: string, nullable: true }
         bankTransactionTitle:
           type: string
@@ -884,6 +921,21 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/PendingReceiptRef" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Store-name suggestions ----
+
+    StoreNameSuggestionsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          maxItems: 20
+          items: { type: string, maxLength: 200 }
+          description: |
+            Ranked, deduplicated store names — most-used first, most-recently-used as the
+            tiebreak. See GET /receipts/store-names's own description for the exact rules.
         meta: { $ref: "#/components/schemas/Meta" }
 
     # ---- Classification batch ----

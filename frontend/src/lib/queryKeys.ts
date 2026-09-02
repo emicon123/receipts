@@ -4,6 +4,10 @@ export const categoriesKeys = {
   all: ["categories"] as const,
 };
 
+export const storeNameSuggestionsKeys = {
+  all: ["storeNameSuggestions"] as const,
+};
+
 export const receiptsKeys = {
   all: ["receipts"] as const,
   list: (filters: ListReceiptsParams) => [...receiptsKeys.all, "list", filters] as const,
