@@ -21,6 +21,7 @@ import pl.receipts.dto.receipt.ReceiptDetail;
 import pl.receipts.dto.receipt.ReceiptListResponse;
 import pl.receipts.dto.receipt.ReceiptSummary;
 import pl.receipts.dto.receipt.StoreNameSuggestionsResponse;
+import pl.receipts.dto.receipt.SubcategoryLabelsResponse;
 import pl.receipts.entity.Receipt;
 import pl.receipts.entity.ReceiptLineItem;
 import pl.receipts.entity.ReceiptStatus;
@@ -75,7 +76,7 @@ public class ReceiptService {
                     .orElseThrow(() -> new IllegalStateException(
                             "category already validated by @ValidCategory: " + input.category()));
             ReceiptLineItem lineItem = new ReceiptLineItem(input.productName(), category, input.amount(),
-                    input.quantity());
+                    input.quantity(), input.subcategory(), input.subSubcategory());
             receipt.addLineItem(lineItem);
             total = total.add(input.amount());
         }
@@ -134,6 +135,19 @@ public class ReceiptService {
     @Transactional(readOnly = true)
     public StoreNameSuggestionsResponse listStoreNameSuggestions() {
         return new StoreNameSuggestionsResponse(receiptRepository.findStoreNameSuggestions());
+    }
+
+    /**
+     * Backs GET /receipts/subcategory-labels — called by classify-receipts.sh once per non-empty
+     * run to splice known labels into infra/classify/prompt.md's {@code {{KNOWN_LABELS_MANIFEST}}}
+     * placeholder (ADR-010 § Cross-batch label consistency). Pure read; the actual normalize/rank
+     * /cap/group logic lives in {@link SubcategoryLabelGrouper} so it can be unit tested without a
+     * DB.
+     */
+    @Transactional(readOnly = true)
+    public SubcategoryLabelsResponse listSubcategoryLabels() {
+        return new SubcategoryLabelsResponse(
+                SubcategoryLabelGrouper.group(lineItemRepository.findSubcategoryLabelRows()));
     }
 
     @Transactional

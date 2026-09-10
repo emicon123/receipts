@@ -245,6 +245,61 @@ paths:
               schema:
                 $ref: "#/components/schemas/StoreNameSuggestionsResponse"
 
+  /receipts/subcategory-labels:
+    get:
+      tags: [receipts, classification]
+      summary: Known subcategory/subSubcategory labels, grouped by category
+      description: |
+        **Called by classify-receipts.sh**, once per run (only when there are pending
+        receipts — same early-exit as the rest of the job), to solve a problem
+        `/receipts/store-names` already solves for a different field: each day's
+        `classify-receipts.sh` run is a fresh `claude -p` invocation with no memory of
+        previous days, so without this endpoint, "stay consistent" guidance in
+        `infra/classify/prompt.md` only holds *within* one batch — nothing stops Claude
+        labeling something "Batony" today and "Batony czekoladowe" next week. The script
+        splices this response into the `{{KNOWN_LABELS_MANIFEST}}` placeholder in
+        `prompt.md` so Claude can reuse an existing label instead of drifting into
+        near-duplicates. See ADR-010 § Cross-batch label consistency.
+
+        Draws from `receipt_line_items.subcategory`/`sub_subcategory` across **every**
+        receipt (any `status`, any `source`) — a label is worth reminding Claude of even
+        if the receipt that produced it is still `PENDING` or ended up `FAILED`. NULL and
+        blank/whitespace-only values are excluded at both levels.
+
+        **Grouped by `category`** (unlike `/receipts/store-names`'s flat list) — "Batony"
+        only makes sense under `JEDZENIE_PIERDOLOWATE`, not `RACHUNKI`, so labels are
+        scoped to the category they were actually assigned under. Only categories with at
+        least one known subcategory appear in `data`; the 11-value set is **not**
+        zero-filled here (unlike `/spending/summary`) since padding empty categories into
+        a prompt manifest would add tokens for nothing.
+
+        **Dedup:** same rule as `/receipts/store-names`, applied at both levels —
+        case-insensitive, trimmed (`lower(trim(...))`) grouping key, with the most-frequent
+        exact-cased variant shown (tie-broken by recency). See
+        `docs/architecture/02-domain-model-and-schema.md` § Known Subcategory/Sub-Subcategory
+        Labels for the exact query shape and ADR-009/ADR-010 for the ranking/dedup rules
+        this reuses.
+
+        **Ranking:** `subcategories` within a category, and `subSubcategories` within a
+        subcategory, are both ordered by usage count descending then most-recent
+        `capturedAt` descending — same two-key ranking as `/receipts/store-names`
+        (ADR-009), reused rather than reinvented.
+
+        **Cap:** top 30 `subSubcategories` per subcategory group — sized for a machine
+        reader (the daily prompt), not `/receipts/store-names`'s top-20-for-a-human-
+        scanning-a-dropdown cap. No cap on the number of distinct `subcategories` within a
+        category at this app's scale (realistically single digits); revisit only if that
+        assumption changes materially. Unpaginated, same reasoning as `/receipts/pending`
+        and `/receipts/store-names`.
+      operationId: listSubcategoryLabels
+      responses:
+        "200":
+          description: Known labels grouped by category (may be an empty array — e.g. before the first classification run has ever produced one).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SubcategoryLabelsResponse"
+
   /receipts/{id}:
     parameters:
       - name: id
@@ -542,6 +597,55 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /spending/line-items:
+    get:
+      tags: [spending]
+      summary: Line items for one category/month (dashboard drill-down)
+      description: |
+        Powers the Wydatki dashboard's category drill-down: clicking a category bar in
+        `CategoryBreakdownChart` fetches the actual line items behind that bar's total, which
+        the frontend groups client-side by `subcategory` → `subSubcategory` (see ADR-010).
+
+        **Deliberately a separate, lazily-fetched endpoint rather than a nested breakdown on
+        `GET /spending/summary`.** The summary endpoint loads eagerly on every dashboard visit
+        and must stay cheap (11 zero-filled totals, no line-item rows); this endpoint is called
+        only once the user clicks one specific category, scoped to exactly that category+month
+        slice — see ADR-010 for the full trade-off.
+
+        Same `PROCESSED`-only scope as `/spending/summary`/`/spending/trend` (PENDING/FAILED
+        receipts don't have reliable line items). Unpaginated by design, same reasoning as
+        `/receipts/pending` and `/receipts/store-names` — a single month/category slice of a
+        personal dataset is small.
+
+        Grouping is **entirely client-side**: this endpoint returns a flat list, ordered by the
+        parent receipt's `capturedAt` descending then line-item `id` ascending. `subcategory`/
+        `subSubcategory` may be `null` on any entry — free-text, classifier-assigned, never
+        backfilled for historical rows (ADR-010) — the frontend falls back to an
+        "Inne"/ungrouped bucket for those rather than dropping the item.
+      operationId: getSpendingLineItems
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer, minimum: 2000, maximum: 2100 }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+        - name: category
+          in: query
+          required: true
+          schema: { $ref: "#/components/schemas/SpendCategory" }
+      responses:
+        "200":
+          description: Line items for that category/month (may be an empty array).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingLineItemsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   # ============================================================================
   # Categories
   # ============================================================================
@@ -792,7 +896,30 @@ components:
         category: { $ref: "#/components/schemas/SpendCategory" }
         amount: { type: number, format: double }
         quantity: { type: number, format: double, nullable: true }
-        corrected: { type: boolean }
+        subcategory:
+          type: string
+          nullable: true
+          maxLength: 100
+          description: |
+            Free-text, classifier-assigned grouping one level finer than `category` (e.g.
+            "Słodycze" under JEDZENIE_PIERDOLOWATE). No enum, no server-side validation
+            (unlike `category`) — see ADR-010. `null` for line items predating this field (no
+            historical backfill) and for any classification-batch/manual entry that omitted it.
+        subSubcategory:
+          type: string
+          nullable: true
+          maxLength: 100
+          description: |
+            Free-text, classifier-assigned grouping one level finer than `subcategory` (e.g.
+            "żelki" under "Słodycze"). Same nullability and no-validation rules as
+            `subcategory` — see ADR-010.
+        corrected:
+          type: boolean
+          description: |
+            Sticky hand-edit flag — set only by PUT /receipts/{id}/line-items/{itemId}, which
+            in this API version can change `productName`/`category`/`amount`/`quantity` only.
+            It does **not** cover `subcategory`/`subSubcategory` yet (no edit UI for them —
+            ADR-010): those two fields are never protected from a reprocess overwrite.
 
     LineItemInput:
       type: object
@@ -802,6 +929,20 @@ components:
         category: { $ref: "#/components/schemas/SpendCategory" }
         amount: { type: number, format: double, minimum: 0 }
         quantity: { type: number, format: double, minimum: 0, nullable: true }
+        subcategory:
+          type: string
+          nullable: true
+          maxLength: 100
+          description: |
+            Free-text, classifier-assigned (see infra/classify/prompt.md). Optional — an older
+            classify-receipts.sh/prompt.md version, or a manual entry, may omit it entirely;
+            omission must never fail validation (ADR-010). No manual-entry UI sets this field
+            in this API version.
+        subSubcategory:
+          type: string
+          nullable: true
+          maxLength: 100
+          description: Same as `subcategory`, one level finer. Optional, same omission rule.
 
     LineItemCorrectionRequest:
       type: object
@@ -936,6 +1077,48 @@ components:
           description: |
             Ranked, deduplicated store names — most-used first, most-recently-used as the
             tiebreak. See GET /receipts/store-names's own description for the exact rules.
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Known subcategory/sub-subcategory labels (cross-batch consistency, ADR-010) ----
+
+    SubcategoryLabelGroup:
+      type: object
+      required: [subcategory, subSubcategories]
+      properties:
+        subcategory:
+          type: string
+          maxLength: 100
+          description: A known `subcategory` value previously assigned within this category.
+        subSubcategories:
+          type: array
+          maxItems: 30
+          items: { type: string, maxLength: 100 }
+          description: |
+            Known `subSubcategory` values previously assigned under this subcategory.
+            Ranked most-used first, most-recently-used as the tiebreak. May be empty if
+            this subcategory has only ever been used without a subSubcategory.
+
+    CategorySubcategoryLabels:
+      type: object
+      required: [category, subcategories]
+      properties:
+        category: { $ref: "#/components/schemas/SpendCategory" }
+        subcategories:
+          type: array
+          items: { $ref: "#/components/schemas/SubcategoryLabelGroup" }
+          description: Ranked most-used first, most-recently-used as the tiebreak.
+
+    SubcategoryLabelsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CategorySubcategoryLabels" }
+          description: |
+            Only categories with at least one known subcategory appear here — not
+            zero-filled across all 11 values. See GET /receipts/subcategory-labels's own
+            description for the exact ranking/cap/dedup rules.
         meta: { $ref: "#/components/schemas/Meta" }
 
     # ---- Classification batch ----
@@ -1094,6 +1277,37 @@ components:
       required: [data, meta]
       properties:
         data: { $ref: "#/components/schemas/SpendingTrendData" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Spending line-item drill-down (GET /spending/line-items, ADR-010) ----
+
+    SpendingLineItem:
+      allOf:
+        - $ref: "#/components/schemas/LineItem"
+        - type: object
+          required: [receiptId, capturedAt]
+          properties:
+            receiptId:
+              type: integer
+              format: int64
+              description: Parent receipt id — for linking to GET /receipts/{id}.
+            storeName:
+              type: string
+              nullable: true
+              maxLength: 200
+              description: Parent receipt's store name, denormalized here to avoid a second round-trip per item.
+            capturedAt:
+              type: string
+              format: date-time
+              description: Parent receipt's capturedAt, denormalized for the same reason — used for display and as the default sort key.
+
+    SpendingLineItemsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/SpendingLineItem" }
         meta: { $ref: "#/components/schemas/Meta" }
 
     # ============================================================================

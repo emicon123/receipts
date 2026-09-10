@@ -8,11 +8,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import type { BarRectangleItem } from "recharts";
 import { formatCurrency } from "@/lib/utils";
-import type { CategoryAmount, CategoryInfo } from "@/lib/types";
+import type { CategoryAmount, CategoryInfo, SpendCategory } from "@/lib/types";
 
 interface ChartRow {
-  code: string;
+  code: SpendCategory;
   label: string;
   amount: number;
 }
@@ -20,6 +21,9 @@ interface ChartRow {
 interface CategoryBreakdownChartProps {
   categories: CategoryInfo[];
   amounts: CategoryAmount[];
+  /** Drill-down navigation (ADR-010) — fired from both the bar and its keyboard-reachable
+   * table-row fallback below, since an SVG bar's onClick alone isn't keyboard accessible. */
+  onCategorySelect: (category: SpendCategory) => void;
 }
 
 function BreakdownTooltip({ active, payload }: { active?: boolean; payload?: { payload: ChartRow }[] }) {
@@ -40,7 +44,11 @@ function BreakdownTooltip({ active, payload }: { active?: boolean; payload?: { p
  * doesn't need — and per the skill's 8-hue categorical cap, can't safely have — a distinct
  * color per bar). Category order always follows GET /api/categories, never re-sorted by value.
  */
-export function CategoryBreakdownChart({ categories, amounts }: CategoryBreakdownChartProps) {
+export function CategoryBreakdownChart({
+  categories,
+  amounts,
+  onCategorySelect,
+}: CategoryBreakdownChartProps) {
   const amountByCode = new Map(amounts.map((a) => [a.category, a.amount]));
   const rows: ChartRow[] = categories.map((c) => ({
     code: c.code,
@@ -64,7 +72,18 @@ export function CategoryBreakdownChart({ categories, amounts }: CategoryBreakdow
               tick={{ fill: "var(--chart-text-secondary)", fontSize: 12 }}
             />
             <Tooltip content={<BreakdownTooltip />} cursor={{ fill: "var(--chart-grid)" }} />
-            <Bar dataKey="amount" fill="var(--chart-series-1)" barSize={20} radius={[0, 4, 4, 0]}>
+            <Bar
+              dataKey="amount"
+              fill="var(--chart-series-1)"
+              barSize={20}
+              radius={[0, 4, 4, 0]}
+              cursor="pointer"
+              activeBar={{ fillOpacity: 0.75 }}
+              onClick={(data: BarRectangleItem) => {
+                const row = data.payload as ChartRow | undefined;
+                if (row) onCategorySelect(row.code);
+              }}
+            >
               <LabelList
                 dataKey="amount"
                 position="right"
@@ -94,7 +113,19 @@ export function CategoryBreakdownChart({ categories, amounts }: CategoryBreakdow
           </thead>
           <tbody>
             {rows.map((row) => (
-              <tr key={row.code} className="border-b border-border last:border-0">
+              <tr
+                key={row.code}
+                role="link"
+                tabIndex={0}
+                onClick={() => onCategorySelect(row.code)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onCategorySelect(row.code);
+                  }
+                }}
+                className="cursor-pointer border-b border-border last:border-0 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              >
                 <td className="py-1.5">{row.label}</td>
                 <td className="py-1.5 text-right tabular-nums">{formatCurrency(row.amount)}</td>
               </tr>

@@ -49,11 +49,14 @@ class ReceiptLifecycleIntegrationTest extends AbstractIntegrationTest {
         // 2. Appears in the pending queue
         assertThat(receiptService.listPending().data()).extracting("id").contains(id);
 
-        // 3. classification-batch classifies it -> PROCESSED, total computed
+        // 3. classification-batch classifies it -> PROCESSED, total computed. "Piwo" carries a
+        //    subcategory/subSubcategory (ADR-010) so step 8 below can confirm what happens to
+        //    them across a correction + reprocess.
         var batchRequest = new ClassificationBatchRequest(
                 List.of(new ClassificationBatchItem(id, "Biedronka", null, List.of(
                         new ClassificationLineItemInput("Mleko", "JEDZENIE_KONIECZNE", new BigDecimal("4.50"), null),
-                        new ClassificationLineItemInput("Piwo", "ALKO", new BigDecimal("8.00"), null)))),
+                        new ClassificationLineItemInput("Piwo", "ALKO", new BigDecimal("8.00"), null,
+                                "Piwo butelkowe", "jasne")))),
                 List.of());
         var batchResult = classificationBatchService.submit(batchRequest);
         assertThat(batchResult.processed()).containsExactly(id);
@@ -104,10 +107,25 @@ class ReceiptLifecycleIntegrationTest extends AbstractIntegrationTest {
             assertThat(li.productName()).isEqualTo("Piwo");
             assertThat(li.corrected()).isTrue();
             assertThat(li.category()).isEqualTo(SpendCategory.ROZRYWKA_RESTAURACJE);
+            // ADR-010 §4 / docs/openapi.yaml's reprocess note: a classification-batch replace
+            // deletes+reinserts only UNCORRECTED line items — a corrected=true row (this one) is
+            // never touched at all, so its pre-correction subcategory/subSubcategory survive
+            // unchanged, same as its productName does. subcategory/subSubcategory carry no
+            // *dedicated* corrected-style protection (there's no edit UI for them to protect),
+            // but nothing in this delete-uncorrected-then-insert mechanism can partially update a
+            // corrected row either — the whole row is skipped, not just the fields `corrected`
+            // documents guarding.
+            assertThat(li.subcategory()).isEqualTo("Piwo butelkowe");
+            assertThat(li.subSubcategory()).isEqualTo("jasne");
         });
         assertThat(afterReclassify.lineItems()).anySatisfy(li -> {
             assertThat(li.productName()).isEqualTo("Chleb");
             assertThat(li.corrected()).isFalse();
+            // The uncorrected "Chleb" row is freshly inserted by this batch and carries no
+            // subcategory (this batch's entry for it didn't supply one) — demonstrating
+            // subcategory/subSubcategory are replaced on every uncorrected row on every batch,
+            // exactly like productName/category/amount already are.
+            assertThat(li.subcategory()).isNull();
         });
         assertThat(afterReclassify.totalAmount()).isEqualByComparingTo("11.00"); // 8.00 (Piwo) + 3.00 (Chleb)
 

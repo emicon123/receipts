@@ -7,8 +7,10 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import pl.receipts.dto.spending.SpendingLineItemsResponse;
 import pl.receipts.dto.spending.SpendingSummaryResponse;
 import pl.receipts.dto.spending.SpendingTrendResponse;
+import pl.receipts.entity.SpendCategory;
 import pl.receipts.service.SpendingService;
 
 @RestController
@@ -31,5 +33,12 @@ public class SpendingController {
     @GetMapping("/trend")
     public SpendingTrendResponse trend(@RequestParam @Min(2000) @Max(2100) int year) {
         return spendingService.trend(year);
+    }
+
+    @GetMapping("/line-items")
+    public SpendingLineItemsResponse lineItems(@RequestParam @Min(2000) @Max(2100) int year,
+                                                @RequestParam @Min(1) @Max(12) int month,
+                                                @RequestParam SpendCategory category) {
+        return spendingService.lineItems(year, month, category);
     }
 }

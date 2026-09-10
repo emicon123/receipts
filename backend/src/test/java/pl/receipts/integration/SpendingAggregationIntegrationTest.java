@@ -69,4 +69,39 @@ class SpendingAggregationIntegrationTest extends AbstractIntegrationTest {
         assertThat(response.data().months()).filteredOn(m -> m.month() != 6)
                 .allSatisfy(m -> assertThat(m.totalAmount()).isEqualByComparingTo(BigDecimal.ZERO));
     }
+
+    /**
+     * GET /spending/line-items (ADR-010 §3) — the dashboard drill-down. Scoped to exactly one
+     * category/month, PROCESSED-only, carries subcategory/subSubcategory plus the denormalized
+     * receiptId/storeName/capturedAt for display and linking back to the parent receipt.
+     */
+    @Test
+    void lineItemsReturnsOnlyThatCategoryAndMonthWithSubcategoryFields() {
+        var receipt = receiptService.createManualReceipt(new ManualReceiptRequest(
+                Instant.parse("2026-04-05T12:00:00Z"), "Zabka",
+                List.of(new LineItemInput("Żelki", "JEDZENIE_PIERDOLOWATE", new BigDecimal("4.50"), null,
+                        "Słodycze", "żelki"))));
+        // Different category, same month -> excluded from the ALKO-scoped call below.
+        receiptService.createManualReceipt(new ManualReceiptRequest(
+                Instant.parse("2026-04-06T12:00:00Z"), "Zabka",
+                List.of(new LineItemInput("Chleb", "JEDZENIE_SREDNIE", new BigDecimal("3.00"), null))));
+
+        var response = spendingService.lineItems(2026, 4, SpendCategory.JEDZENIE_PIERDOLOWATE);
+
+        assertThat(response.data()).hasSize(1);
+        var item = response.data().get(0);
+        assertThat(item.productName()).isEqualTo("Żelki");
+        assertThat(item.subcategory()).isEqualTo("Słodycze");
+        assertThat(item.subSubcategory()).isEqualTo("żelki");
+        assertThat(item.receiptId()).isEqualTo(receipt.id());
+        assertThat(item.storeName()).isEqualTo("Zabka");
+        assertThat(item.capturedAt()).isEqualTo(Instant.parse("2026-04-05T12:00:00Z"));
+    }
+
+    @Test
+    void lineItemsForACategoryMonthWithNoDataIsEmpty() {
+        var response = spendingService.lineItems(2019, 1, SpendCategory.SUPLE);
+
+        assertThat(response.data()).isEmpty();
+    }
 }

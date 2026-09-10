@@ -65,6 +65,14 @@ export interface LineItem {
   category: SpendCategory;
   amount: number;
   quantity?: number | null;
+  /**
+   * Free-text, classifier-assigned grouping one level finer than `category` (e.g. "Słodycze"
+   * under JEDZENIE_PIERDOLOWATE). No enum, no validation — see ADR-010. `null` for line items
+   * predating this field (no historical backfill) and for any batch/manual entry that omitted it.
+   */
+  subcategory?: string | null;
+  /** Free-text grouping one level finer than `subcategory` (e.g. "żelki"). Same rules as above. */
+  subSubcategory?: string | null;
   corrected: boolean;
 }
 
@@ -134,6 +142,17 @@ export interface SpendingMonth {
 export interface SpendingTrendData {
   year: number;
   months: SpendingMonth[];
+}
+
+/**
+ * One line item in the GET /spending/line-items drill-down (ADR-010) — the same LineItem shape
+ * plus fields denormalized from the parent receipt, for display and for linking back to
+ * GET /receipts/{id}. Mirrors openapi.yaml's SpendingLineItem (an `allOf` over LineItem).
+ */
+export interface SpendingLineItem extends LineItem {
+  receiptId: number;
+  storeName?: string | null;
+  capturedAt: string;
 }
 
 // ---- List filters ----
