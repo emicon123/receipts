@@ -33,19 +33,28 @@ sequenceDiagram
     Backend->>DB: SELECT WHERE status='PENDING'
     Backend-->>Cron: 200 { data: [{id}, ...] } — pure read, no status change
 
+    Note over Cron: Only reached when the pending list is non-empty (same<br/>early-exit as the rest of the job — no point fetching this for nothing)
+    Cron->>Backend: GET /api/receipts/subcategory-labels
+    Backend->>DB: SELECT DISTINCT subcategory/sub_subcategory<br/>GROUP BY category (ADR-010 cross-batch consistency)
+    Backend-->>Cron: 200 { data: [{category, subcategories:[...]}...] }
+    Cron->>Cron: Render as a nested manifest (jq), splice into<br/>{{KNOWN_LABELS_MANIFEST}} placeholder in prompt.md
+
     loop for each pending id
         Cron->>Backend: GET /api/receipts/{id}/image
         Backend-->>Cron: image bytes (downloaded to a local temp file)
     end
 
-    Cron->>Claude: claude -p "<prompt.md + id→path manifest>"<br/>--output-format json --allowedTools Read
+    Cron->>Claude: claude -p "<prompt.md (labels spliced in) + id→path manifest>"<br/>--output-format json --allowedTools Read
     Claude->>Claude: Read each image, extract + categorize line items
+    Claude->>Claude: Self-check each photo receipt (ADR-011):<br/>sum lineItems[].amount vs extracted total (±0.05 zł);<br/>on mismatch, re-scan for a missed qty multiplier,<br/>missed line, or misread digit before finalizing
     Claude-->>Cron: .result — should be raw {"items":[...],"failures":[...]}<br/>but not reliably (ADR-008: fences/preamble observed in prod)
 
     Cron->>Cron: Defensively extract JSON from .result (ADR-008):<br/>strip leading/trailing code fence if present,<br/>take substring first "{" .. last "}", validate via `jq empty`
     alt extraction/validation fails
         Note over Cron,DB: Treated exactly like is_error:true — log raw .result,<br/>leave all pending receipts PENDING, exit. No POST made.
     else valid JSON
+        Cron->>Cron: Sanity-check (ADR-011, non-blocking): for each items[]<br/>entry carrying a total, compute sum(lineItems[].amount) via jq<br/>and compare (±0.05 zł). Mismatch → log WARNING<br/>(receiptId, sum, total, delta); never blocks the batch.
+        Cron->>Cron: Strip the total field from every items[] entry<br/>(jq 'del(.total)') — verification-only, not part of<br/>ClassificationBatchItem's wire schema (ADR-011)
         Cron->>Backend: POST /api/receipts/classification-batch
         activate Backend
         Backend->>DB: per items[] entry: PENDING→PROCESSING→PROCESSED<br/>(replace uncorrected line items, recompute total_amount)
@@ -83,6 +92,24 @@ Key contract points visible in this flow:
   trailing code fence, extracts the substring from the first `{` to the last `}`, and validates
   it parses before treating it as the batch. Extraction/validation failure degrades identically
   to `is_error: true` — log and leave every receipt in the run `PENDING`, no partial submission.
+- **Cross-batch label consistency (ADR-010 refinement).** Each `claude -p` invocation is a fresh
+  process with no memory of previous days, so `GET /receipts/subcategory-labels` is fetched once
+  per run (only when the batch is non-empty) and spliced into a `{{KNOWN_LABELS_MANIFEST}}`
+  placeholder in `prompt.md` — the same "reuse an existing label instead of inventing a
+  near-duplicate" problem `/receipts/store-names` already solves for `store_name`, applied to
+  `subcategory`/`subSubcategory` instead. See `infra/classify/prompt.md` and ADR-010.
+- Claude self-checks each photo receipt before finalizing it: sum `lineItems[].amount`, compare to
+  its own extracted `total`, and re-scan the image on a >0.05 zł mismatch — this is what catches a
+  missed quantity multiplier (e.g. reading a unit price where the receipt shows `6 x 3,49`) before
+  it ever reaches the JSON output (ADR-011).
+- `total` is verification-only — it is **not** part of `ClassificationBatchItem`'s wire schema to
+  the backend. The script re-runs the same sum-vs-`total` comparison independently via `jq` after
+  extracting valid JSON and before POSTing (a non-blocking diagnostic: a mismatch logs a WARNING
+  with the receipt id, computed sum, printed total, and delta, but the batch still submits — a
+  legitimate mismatch can occur, e.g. a whole-receipt discount not broken out per line), then
+  strips `total` from every `items[]` entry before the POST. `ClassificationBatchItem` has no slot
+  for it and Spring's default Jackson config rejects unknown properties, so an unstripped `total`
+  would reject the *entire* batch submission, not just be silently ignored (ADR-011).
 
 ---
 

@@ -58,6 +58,42 @@ fi
 
 log "Found ${count} pending receipt(s) — downloading images."
 
+# ADR-010 §5 points 1-3: cross-batch subcategory/subSubcategory label consistency. Only reached
+# on a non-empty run (same "don't do extra work on an empty queue" guard as the claude invocation
+# itself). Same reachability-failure-aborts-the-run handling as the /receipts/pending call above.
+log "Fetching known subcategory/subSubcategory labels for cross-batch consistency."
+labels_json="$(curl -sf "${API_BASE}/receipts/subcategory-labels")" || fail "could not reach backend"
+
+# ADR-010 §5 point 4: render the SubcategoryLabelsResponse into the exact nested-bullet manifest
+# text prompt.md's "Known labels from previous runs" subsection expects — one top-level bullet
+# per category, one nested bullet per subcategory listing its subSubcategories comma-joined (or
+# nothing after the subcategory name if that list is empty). `data` may be `[]`, in which case the
+# manifest is instead the single literal fallback line, matched verbatim to what prompt.md itself
+# already says this fallback means — don't reword it.
+known_labels_manifest="$(echo "${labels_json}" | jq -r '
+  if (.data | length) == 0 then
+    "(none recorded yet — use your own best judgment for every subcategory/subSubcategory.)"
+  else
+    (.data[] | "- " + .category,
+      (.subcategories[] | "  - " + .subcategory +
+        (if (.subSubcategories | length) > 0
+         then ": " + (.subSubcategories | join(", "))
+         else "" end)))
+  end
+')"
+
+# ADR-010 §5 point 5: splice (not append) the manifest into prompt.md's mid-file, exactly-once
+# {{KNOWN_LABELS_MANIFEST}} placeholder. This is a multi-line replacement, so it deliberately does
+# NOT use a single-line `sed s/.../.../` — that would need the replacement text escaped for the
+# delimiter and can't cleanly substitute embedded newlines. Instead awk does a full-file, literal
+# ($0 == token, no regex) line match and prints the rendered manifest in place of that one line.
+# The manifest text is passed via ENVIRON rather than an awk -v assignment specifically to avoid
+# -v's backslash-escape processing mangling any label text that happens to contain a backslash.
+prompt_with_labels="$(MANIFEST_TEXT="${known_labels_manifest}" awk -v token='{{KNOWN_LABELS_MANIFEST}}' '
+  $0 == token { print ENVIRON["MANIFEST_TEXT"]; next }
+  { print }
+' "${PROMPT_FILE}")"
+
 manifest=""
 while IFS= read -r id; do
   img="${TMP_DIR}/receipt-${id}.jpg"
@@ -66,7 +102,7 @@ while IFS= read -r id; do
 - id=${id} path=${img}"
 done < <(echo "${pending_json}" | jq -r '.data[].id')
 
-full_prompt="$(cat "${PROMPT_FILE}")
+full_prompt="${prompt_with_labels}
 ${manifest}"
 
 # --allowedTools "Read" only: Claude's job here is purely to read the downloaded images and
@@ -89,6 +125,34 @@ raw_result="$(echo "${result_json}" | jq -r '.result')"
 # in this run PENDING for the next scheduled slot, never `fail()`, never a partial submission.
 batch="$(extract_batch_json "${raw_result}")" \
   || { log "Could not extract valid JSON from Claude's result — leaving all ${count} receipt(s) PENDING for the next scheduled slot. Raw result: ${raw_result}"; exit 0; }
+
+# ADR-011: independent, script-side sanity check — for each items[] entry carrying a `total`
+# (the receipt's own printed grand total, verification-only), compare it against
+# sum(lineItems[].amount) using the same ±0.05 zł tolerance as Claude's own in-prompt self-check.
+# Cents (integers) are used for the comparison rather than raw zł floats to avoid false positives
+# from floating-point rounding right at the tolerance boundary. This is a diagnostic safety net,
+# not a gate: a mismatch only logs a WARNING (id, computed sum, printed total, delta) and never
+# blocks, fails, or marks anything FAILED — the batch is still submitted as-is regardless.
+while IFS=$'\t' read -r mismatch_id mismatch_sum mismatch_total mismatch_delta; do
+  log "WARNING: receipt ${mismatch_id} line-item sum (${mismatch_sum}) does not match its printed total (${mismatch_total}) — delta ${mismatch_delta} zł exceeds the ±0.05 zł tolerance (ADR-011)"
+done < <(echo "${batch}" | jq -r '
+  (.items // [])[]
+  | select(has("total"))
+  | . as $item
+  | ((($item.lineItems // []) | map(.amount) | add) // 0) as $sum
+  | (($sum * 100) | round) as $sum_cents
+  | (($item.total * 100) | round) as $total_cents
+  | ($sum_cents - $total_cents) as $diff_cents
+  | (if $diff_cents < 0 then -$diff_cents else $diff_cents end) as $delta_cents
+  | select($delta_cents > 5)
+  | [$item.receiptId, $sum, $item.total, ($delta_cents / 100)] | @tsv
+')
+
+# ADR-011: `total` is verification-only and has no slot in ClassificationBatchItem — this app's
+# Jackson config has no fail-on-unknown-properties override, so its default
+# (FAIL_ON_UNKNOWN_PROPERTIES=true) would 400 the entire batch if `total` were left in. Strip it
+# from every items[] entry now, after the sanity check above, before the POST below.
+batch="$(echo "${batch}" | jq '.items = ((.items // []) | map(del(.total)))')"
 
 curl -sf -X POST "${API_BASE}/receipts/classification-batch" \
   -H "Content-Type: application/json" \
