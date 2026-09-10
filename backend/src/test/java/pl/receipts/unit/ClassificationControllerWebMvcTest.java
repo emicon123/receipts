@@ -14,8 +14,12 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import pl.receipts.controller.ClassificationController;
 import pl.receipts.dto.classification.ClassificationBatchResult;
+import pl.receipts.dto.receipt.CategorySubcategoryLabels;
 import pl.receipts.dto.receipt.PendingReceiptRef;
 import pl.receipts.dto.receipt.PendingReceiptsResponse;
+import pl.receipts.dto.receipt.SubcategoryLabelGroup;
+import pl.receipts.dto.receipt.SubcategoryLabelsResponse;
+import pl.receipts.entity.SpendCategory;
 import pl.receipts.service.ClassificationBatchService;
 import pl.receipts.service.ReceiptService;
 
@@ -58,6 +62,21 @@ class ClassificationControllerWebMvcTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{ \"items\": [] }"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void subcategoryLabelsReturnsGroupedShape() throws Exception {
+        var group = new SubcategoryLabelGroup("Słodycze", java.util.List.of("żelki", "batony"));
+        var categoryLabels = new CategorySubcategoryLabels(SpendCategory.JEDZENIE_PIERDOLOWATE,
+                java.util.List.of(group));
+        given(receiptService.listSubcategoryLabels())
+                .willReturn(new SubcategoryLabelsResponse(java.util.List.of(categoryLabels)));
+
+        mockMvc.perform(get("/api/receipts/subcategory-labels"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].category").value("JEDZENIE_PIERDOLOWATE"))
+                .andExpect(jsonPath("$.data[0].subcategories[0].subcategory").value("Słodycze"))
+                .andExpect(jsonPath("$.data[0].subcategories[0].subSubcategories[0]").value("żelki"));
     }
 
     @Test

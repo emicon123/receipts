@@ -28,6 +28,7 @@ files — everything lives in `docs/openapi.yaml#/components/schemas`).
 | GET | `/api/receipts` | PWA | Paginated list, filterable by `year`, `month`, `status`, `source`. Default sort `capturedAt` desc. |
 | GET | `/api/receipts/pending` | **classify-receipts.sh** | List of everything `PENDING`. Pure read — never mutates status (see `03-receipt-lifecycle.md`). Unpaginated by design. Lean `{id}` for `CAMERA`; inline transaction fields (no image to fetch) for `BANK_IMPORT` — design-only, ADR-007, see `06-bank-integration.md`. |
 | GET | `/api/receipts/store-names` | PWA (manual-entry combobox) | Ranked, deduplicated `storeName` suggestions across all receipts/sources/statuses. Unpaginated, capped at 20. See `02-domain-model-and-schema.md` § Store-Name Suggestions and ADR-009 for the ranking/dedup rules. |
+| GET | `/api/receipts/subcategory-labels` | **classify-receipts.sh** | Known `subcategory`/`subSubcategory` labels, grouped by category, ranked/deduped the same way as `store-names` but capped at 30 `subSubcategories` per subcategory rather than a flat top-20. Spliced into `prompt.md`'s `{{KNOWN_LABELS_MANIFEST}}` placeholder so the classifier reuses a label across daily runs instead of drifting into near-duplicates. See `02-domain-model-and-schema.md` § Known Subcategory/Sub-Subcategory Labels and ADR-010 § Cross-batch label consistency. |
 | GET | `/api/receipts/{id}` | PWA | Full detail incl. `imageUrl` + line items. |
 | GET | `/api/receipts/{id}/image` | PWA, **classify-receipts.sh** | Raw image bytes. 404 for a `MANUAL`/`BANK_IMPORT` receipt (no image) or unknown id. |
 
@@ -46,6 +47,7 @@ resolves it through that same mechanism rather than using the backend's path ver
 | DELETE | `/api/receipts/{id}` | PWA | Removes the row (cascade) and the image file. Also how the backend performs the late-match dedup cleanup described in `06-bank-integration.md`. |
 | GET | `/api/spending/summary?year=&month=` | PWA | All 11 categories, zero-filled. |
 | GET | `/api/spending/trend?year=` | PWA | All 12 months, each zero-filled per category. |
+| GET | `/api/spending/line-items?year=&month=&category=` | PWA (drill-down, on click only) | Flat list of that category/month's line items (`productName`, `amount`, `quantity`, `subcategory`, `subSubcategory`, plus `receiptId`/`storeName`/`capturedAt` for display and linking back to the receipt). Unpaginated. A separate, lazily-fetched endpoint by design, not a nested field on `summary` — see ADR-010. Client groups by `subcategory` → `subSubcategory` itself; either may be `null`. |
 | GET | `/api/categories` | PWA | Static list (Polish label + gloss), canonical order. |
 | POST | `/api/bank/consent` | PWA (Settings) | **Design-only, ADR-007.** Initiates the PSD2 consent flow — returns a redirect URL. |
 | GET | `/api/bank/consent/callback` | PKO (browser redirect) | **Design-only, ADR-007.** OAuth2 authorization-code callback — not called by the PWA's JS. |
@@ -73,6 +75,37 @@ contract handles this per-entry, not per-request:
 `source` is not `BANK_IMPORT` is invalid classifier output — tolerated the same way an unknown
 `receiptId` already is (skipped, reported, never aborts the batch), never a 400. See
 `06-bank-integration.md`.
+
+## `subcategory` / `subSubcategory` (ADR-010)
+
+Both fields live on `LineItem`/`LineItemInput` (used by `ReceiptDetail`, `classification-batch`,
+manual entry, and the new `SpendingLineItem` drill-down entry alike — one shared pair of fields,
+not a parallel schema per endpoint). Contract points that matter to Backend/Frontend:
+
+- **Free-text, optional, nullable — no enum, no validation.** Unlike `category`, an unexpected
+  or inconsistent value is never rejected and never routes a receipt to `FAILED`; there is
+  nothing to validate against (see ADR-005 for why `category` is the one field that *is* a
+  closed enum, and ADR-010 for why these two deliberately are not).
+- **Omission is always valid**, on any endpoint that accepts `LineItemInput` — an older
+  `classify-receipts.sh`/`prompt.md` version, or a manual entry, may send a batch/request with
+  neither field present. Both simply persist as `NULL`.
+- **No backfill.** Every line item created before `V2__line_item_subcategories.sql` has both
+  fields `NULL` forever, unless that specific receipt is reprocessed.
+- **`corrected` does not cover these two fields.** A reprocess replaces them freely even on a
+  line item whose `category`/`amount`/`productName` the user has hand-corrected — there is no
+  edit UI for `subcategory`/`subSubcategory` in this API version, so there is nothing yet to
+  protect from being overwritten. If a future task adds that UI, extending `corrected`'s
+  protection to these fields is a deliberate follow-up decision, not an oversight (ADR-010 calls
+  this out explicitly).
+- **Cross-batch consistency is enforced by feeding known labels back into the prompt, not by
+  server-side validation.** `GET /receipts/subcategory-labels` returns every distinct label
+  already used, grouped by category; `classify-receipts.sh` fetches it once per non-empty run and
+  splices it into `infra/classify/prompt.md`'s `{{KNOWN_LABELS_MANIFEST}}` placeholder, so each
+  day's otherwise-stateless `claude -p` invocation can reuse an existing label instead of
+  inventing a near-duplicate ("Batony" vs. "Batony czekoladowe" for the same concept). This is
+  still advisory — nothing rejects a batch over a label that ignores the known list — it only
+  changes what Claude is told, not what the backend accepts. See ADR-010 § Cross-batch label
+  consistency.
 
 ## Categories
 

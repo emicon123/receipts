@@ -3,7 +3,8 @@
 > **Audience:** Backend agent (primary), all agents for reference.
 > **Rules:** All schema changes go through Flyway versioned SQL (`V{n}__{description}.sql`). No
 > `ddl-auto`. PKs: `BIGSERIAL`. Money: `NUMERIC(10,2)`, never `FLOAT`/`DOUBLE`. Timestamps:
-> `TIMESTAMPTZ`. Canonical migration: `backend/src/main/resources/db/migration/V1__init.sql`.
+> `TIMESTAMPTZ`. Canonical migrations: `backend/src/main/resources/db/migration/V1__init.sql`
+> (initial schema) and `V2__line_item_subcategories.sql` (adds `subcategory`/`sub_subcategory`).
 
 ---
 
@@ -22,10 +23,14 @@ this document only translates that table into SQL, it does not redefine the rule
 
 ## ER Diagram
 
-This is the schema as it exists in `V1__init.sql` today (two tables). See
-`06-bank-integration.md` for the full updated ER diagram including `BANK_IMPORT`'s two new
-columns and the `bank_connection`/`bank_transaction_log` tables — not duplicated here to avoid
-two diagrams drifting out of sync; that document is the current one once bank import lands.
+This is the schema as it exists after `V1__init.sql` + `V2__line_item_subcategories.sql` today
+(two tables). `V2` is purely additive — two nullable free-text columns on
+`receipt_line_items`, no new table, no new enum (see ADR-010: `subcategory`/`sub_subcategory`
+are a free-text layer, deliberately not extending `spend_category_enum`'s fixed-list approach
+from ADR-005). See `06-bank-integration.md` for the full updated ER diagram including
+`BANK_IMPORT`'s two new columns and the `bank_connection`/`bank_transaction_log` tables — not
+duplicated here to avoid two diagrams drifting out of sync; that document is the current one
+once bank import lands.
 
 ```mermaid
 erDiagram
@@ -48,6 +53,8 @@ erDiagram
         bigint receipt_id FK
         varchar product_name "300"
         spend_category_enum category "11 fixed values, see CLAUDE.md"
+        varchar subcategory "100, NULL — free-text, classifier-assigned, see ADR-010"
+        varchar sub_subcategory "100, NULL — free-text, one level finer, see ADR-010"
         numeric amount "10,2"
         numeric quantity "10,3 NULL — not every receipt prints one"
         boolean corrected "DEFAULT false — sticky, see rule below"
@@ -100,6 +107,16 @@ CREATE TYPE spend_category_enum AS ENUM (
    later" policy unchanged — this new status exists only for whole-transaction bank
    classification, where an unconfident guess must not be forced through. See
    `06-bank-integration.md`.
+8. **`subcategory`/`sub_subcategory` are free-text and never validated, unlike `category`
+   (ADR-010).** No enum, no `CHECK` constraint, no server-side rejection for an inconsistent or
+   unusual label — Claude is only asked (in `infra/classify/prompt.md`) to reuse the same label
+   for the same concept within one classification batch, which is advisory, not enforced.
+   Existing rows are left `NULL` — there is no bulk-reclassification of historical receipts in
+   scope, and any classification-batch/manual entry that omits these fields (e.g. an older
+   prompt/script version) must not fail validation. **`corrected` does not cover these two
+   fields** — a reprocess is free to overwrite them even on a line item where the user has
+   hand-corrected `category`/`amount`/`productName`, since there is no edit UI for
+   `subcategory`/`sub_subcategory` yet to protect in the first place.
 
 ## Indexes
 
@@ -114,6 +131,14 @@ CREATE TYPE spend_category_enum AS ENUM (
   sequential scan on an occasional dashboard page view is cheap. Adding one would be pure YAGNI
   overhead at this data scale.
 - **Deliberately no index on `receipts.store_name` either**, for the same reason — see below.
+- **Deliberately no index on `receipt_line_items.subcategory`/`sub_subcategory` either.**
+  `GET /spending/line-items` (ADR-010) already scopes its query to one month + one category via
+  the existing `idx_receipts_captured_at` join and a `category =` filter before it ever looks at
+  these two columns — the slice being scanned is already small, so indexing free-text fields
+  that exist purely for client-side grouping would be premature at this data scale. Same
+  reasoning covers `GET /receipts/subcategory-labels` (see below) even though it scans **all**
+  receipts rather than one month — a personal dataset's total row count is still low thousands
+  at the outside, and this endpoint is called at most once per cron run, not a hot path.
 
 ## Store-Name Suggestions (`GET /receipts/store-names`)
 
@@ -166,6 +191,102 @@ personal single-user dataset stays in the low thousands of `receipts` rows, this
 occasional autocomplete-populating call (not a hot path), and a sequential scan + in-memory
 `GROUP BY` over that volume is cheap. Revisit only if the dataset's scale assumption changes.
 
+## Known Subcategory/Sub-Subcategory Labels (`GET /receipts/subcategory-labels`)
+
+Solves, for `subcategory`/`sub_subcategory` (ADR-010), the same cross-run drift problem
+`/receipts/store-names` (ADR-009) already solves for `store_name` — except here the problem is
+worse, because there's no human in the loop at all: `store_name` drift gets caught by a person
+typing into a combobox that shows existing options, but `subcategory`/`sub_subcategory` are
+assigned entirely by Claude, in a fresh `claude -p` process each day with zero memory of
+yesterday's labels. Without this endpoint, "stay consistent" in `infra/classify/prompt.md` only
+holds *within* one batch. This endpoint feeds the classifier's own prompt (not a UI, unlike
+store-names) with every label it has already used, grouped by `category` since a subcategory
+like "Batony" is only ever meaningful under `JEDZENIE_PIERDOLOWATE`. Full endpoint contract in
+`docs/openapi.yaml`; how it gets spliced into `infra/classify/prompt.md` is specified in
+`infra/classify/prompt.md` itself and ADR-010 § Cross-batch label consistency. This section
+fixes the query shape.
+
+1. **Filter:** exclude rows where `subcategory IS NULL` or `trim(subcategory) = ''`. Within a
+   subcategory group, further exclude `sub_subcategory IS NULL`/blank when building its
+   `subSubcategories` list (a subcategory can be known even if no `sub_subcategory` has ever
+   accompanied it).
+2. **Normalize for dedup, at both levels:** group by `(category, lower(trim(subcategory)))` for
+   the subcategory level; within each such group, further group by
+   `lower(trim(sub_subcategory))` for the sub-subcategory level. Same normalization ADR-009
+   already established for `store_name` — reused here, not reinvented.
+3. **Rank + pick display casing, at both levels:** within each normalized group, the exact-cased
+   variant shown is the one with the highest occurrence count (tie-broken by that variant's own
+   most recent `capturedAt`) — identical rule to store-names § step 4. Groups themselves —
+   `subcategories` within a category, `subSubcategories` within a subcategory — are ordered by
+   `COUNT(*) DESC` then `MAX(captured_at) DESC`, the same two-key ranking as store-names §
+   step 3.
+4. **Cap:** top 30 `subSubcategories` per subcategory group. Sized for a machine reader (the
+   daily prompt manifest) rather than store-names' top-20-for-a-scanned-dropdown cap — high
+   enough that it will not realistically bind at this app's personal scale, low enough to bound
+   worst-case prompt growth if a subcategory's sub-subcategory vocabulary ever did sprawl. No cap
+   on the number of distinct `subcategories` per category — expected to stay single-digit to low
+   double-digit; if that assumption changes, that itself is a signal worth a fresh look, not
+   something to silently truncate away from what the classifier gets told.
+5. **Output shape:** grouped hierarchically (`category → subcategories[] → subSubcategories[]`),
+   not a flat list — this is what lets `classify-receipts.sh` render it directly as a nested
+   manifest (see `infra/classify/prompt.md`) without a client-side regroup. Only categories with
+   at least one known subcategory appear; the 11-value set is not zero-filled (unlike
+   `/spending/summary`) since a prompt manifest gains nothing from padding in empty categories.
+
+Sketch (Postgres; captures the shape, not a mandated literal query — see note below on an
+equally valid alternative):
+
+```sql
+WITH normalized AS (
+  SELECT li.category, li.subcategory, lower(trim(li.subcategory)) AS sub_key,
+         li.sub_subcategory, lower(trim(li.sub_subcategory)) AS subsub_key,
+         r.captured_at
+  FROM receipt_line_items li
+  JOIN receipts r ON r.id = li.receipt_id
+  WHERE li.subcategory IS NOT NULL AND trim(li.subcategory) <> ''
+),
+best_sub_casing AS (
+  SELECT DISTINCT ON (category, sub_key) category, sub_key, subcategory AS display_subcategory
+  FROM normalized
+  GROUP BY category, sub_key, subcategory
+  ORDER BY category, sub_key, COUNT(*) DESC, MAX(captured_at) DESC
+),
+sub_groups AS (
+  SELECT category, sub_key, COUNT(*) AS usage_count, MAX(captured_at) AS last_used_at
+  FROM normalized GROUP BY category, sub_key
+),
+subsub_normalized AS (
+  SELECT * FROM normalized
+  WHERE sub_subcategory IS NOT NULL AND trim(sub_subcategory) <> ''
+),
+best_subsub_casing AS (
+  SELECT DISTINCT ON (category, sub_key, subsub_key) category, sub_key, subsub_key,
+         sub_subcategory AS display_subsubcategory
+  FROM subsub_normalized
+  GROUP BY category, sub_key, subsub_key, sub_subcategory
+  ORDER BY category, sub_key, subsub_key, COUNT(*) DESC, MAX(captured_at) DESC
+),
+subsub_groups AS (
+  SELECT category, sub_key, subsub_key, COUNT(*) AS usage_count, MAX(captured_at) AS last_used_at,
+         ROW_NUMBER() OVER (PARTITION BY category, sub_key
+                             ORDER BY COUNT(*) DESC, MAX(captured_at) DESC) AS rn
+  FROM subsub_normalized GROUP BY category, sub_key, subsub_key
+)
+-- assemble: sub_groups joined to best_sub_casing gives each category's subcategories,
+-- subsub_groups (rn <= 30) joined to best_subsub_casing gives each subcategory's capped,
+-- ranked subSubcategories — grouped in application code into the nested response shape.
+```
+
+**Given this query's two-level nesting, Backend may find it materially simpler to fetch a flat,
+already-filtered `(category, subcategory, subSubcategory, capturedAt)` projection and do the
+normalize/rank/cap/group steps in the service layer (e.g. Java `Collectors.groupingBy` chains)
+rather than nested SQL.** At this app's data volume either approach is cheap; pick whichever is
+more maintainable — the four numbered rules above are the actual contract, not the SQL sketch.
+
+**No new index.** Same reasoning as store-names above, extended: this endpoint scans *all*
+receipts (not one month), but a personal dataset's total row count stays in the low thousands,
+and it is called at most once per `classify-receipts.sh` run — not a hot path.
+
 ---
 
 ## Pattern & Principle Evaluation
@@ -187,6 +308,9 @@ repeated per endpoint, since the same reasoning applies uniformly across this ap
 | Specification pattern (query filters) | **rejected** | 3 optional filters (`year`/`month`/`status`) map directly to a Spring Data JPA query method or a small JPQL query — a Specification/Criteria abstraction is overkill. |
 | Materialized view / cache for `GET /receipts/store-names` | **rejected** | Considered, since it's a GROUP BY/aggregate query. Rejected: low-thousands-row table, called only when the manual-entry form opens (not a hot path) — a live aggregate query is cheap enough that a cache/materialized view would be YAGNI, and would add a staleness problem (a store name used seconds ago should be suggestible immediately) for no real benefit. |
 | "Claim-and-release" on `GET /pending` (mark `PROCESSING` on fetch) | **rejected** | Considered, to guard `GET /pending` against overlapping cron runs. Rejected: CLAUDE.md's job design already serializes runs (the same-day safety-net slots are sequential, not concurrent), and the "every receipt stays `PENDING` on any failure" rule requires `GET /pending` to be a pure, non-mutating read — see `03-receipt-lifecycle.md` for where `PROCESSING` is actually used instead. |
+| Free-text `subcategory`/`sub_subcategory` columns vs. a second enum/lookup table (ADR-010) | **adopted (free-text)** | Unlike `spend_category_enum`'s closed 11-value list (ADR-005), these are classifier-generated groupings with no user-given closed list — a fixed enum can't be extended without a migration every time a new grouping emerges, which defeats the point; a lookup table would need the same CRUD machinery ADR-005 already rejected for the main category. Plain nullable `VARCHAR` columns, YAGNI-appropriate for advisory, non-validated data. |
+| `GET /spending/line-items` as a new endpoint vs. a nested breakdown on `GET /spending/summary` (ADR-010) | **adopted (new endpoint)** | The summary endpoint loads eagerly on every dashboard visit and must stay a cheap 11-row aggregate; a category's line items are only ever needed lazily, on click, for one category+month at a time — a dedicated endpoint keeps the eager path unchanged and fetches drill-down data only when actually requested. |
+| `GET /receipts/subcategory-labels` as a new endpoint vs. extending `/receipts/store-names` to return arbitrary "known values of field X" (ADR-010 refinement) | **adopted (new endpoint)** | Reuses store-names' *shape* (ranked, deduplicated, capped, unpaginated) but not its *route* — the response needed is a category-scoped hierarchy (`category → subcategory → subSubcategory[]`), not a flat string list, so a generic single endpoint would need a discriminated-union response purely to save a route, for two consumers (PWA combobox vs. the prompt-builder script) that will never share a call site. Same reasoning class as the `GET /spending/line-items`-vs-nested-field call directly above: different shape/consumer wins over route reuse. |
 
 **Bank-import additions (design-only, ADR-007):** Ports & Adapters for the PSD2 client, and
 several more pattern calls specific to that integration (a rejected three-way match state

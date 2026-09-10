@@ -115,6 +115,119 @@ class ReceiptRepositoryDataJpaTest {
         assertThat(remaining.get(0).isCorrected()).isTrue();
     }
 
+    /**
+     * Confirms V2__line_item_subcategories.sql applied cleanly and the new columns round-trip —
+     * the most direct possible check that the migration exists and matches the entity mapping
+     * (a broken/missing migration would fail Flyway validation at context startup for every test
+     * in this module, but this test also proves the columns are actually readable/writable via
+     * the entity, not just present in the schema).
+     */
+    @Test
+    void subcategoryAndSubSubcategoryColumnsPersistAndReadBack() {
+        Receipt receipt = Receipt.newCameraUpload("2026/05/sub.jpg", Instant.now());
+        entityManager.persist(receipt);
+
+        ReceiptLineItem withSubcategories = new ReceiptLineItem("Żelki", SpendCategory.JEDZENIE_PIERDOLOWATE,
+                new BigDecimal("4.50"), null, "Słodycze", "żelki");
+        withSubcategories.setReceipt(receipt);
+        ReceiptLineItem withoutSubcategories = new ReceiptLineItem("Mleko", SpendCategory.JEDZENIE_KONIECZNE,
+                new BigDecimal("3.00"), null);
+        withoutSubcategories.setReceipt(receipt);
+        entityManager.persist(withSubcategories);
+        entityManager.persist(withoutSubcategories);
+        entityManager.flush();
+        entityManager.clear();
+
+        var reloaded = lineItemRepository.findByReceiptIdOrderByIdAsc(receipt.getId());
+        assertThat(reloaded).hasSize(2);
+        assertThat(reloaded.get(0).getSubcategory()).isEqualTo("Słodycze");
+        assertThat(reloaded.get(0).getSubSubcategory()).isEqualTo("żelki");
+        assertThat(reloaded.get(1).getSubcategory()).isNull(); // omitted -> NULL, no backfill (ADR-010)
+        assertThat(reloaded.get(1).getSubSubcategory()).isNull();
+    }
+
+    /** Covers ReceiptLineItemRepository.findForSpendingDrilldown backing GET /spending/line-items. */
+    @Test
+    void findForSpendingDrilldownScopesToCategoryMonthAndProcessedOnly() {
+        Receipt march = Receipt.newCameraUpload("2026/03/a.jpg", Instant.parse("2026-03-10T09:00:00Z"));
+        march.setStatus(ReceiptStatus.PROCESSED);
+        march.setStoreName("Biedronka");
+        entityManager.persist(march);
+        ReceiptLineItem marchAlko = new ReceiptLineItem("Wino", SpendCategory.ALKO, new BigDecimal("30.00"), null,
+                "Wino", null);
+        marchAlko.setReceipt(march);
+        entityManager.persist(marchAlko);
+        ReceiptLineItem marchOtherCategory = new ReceiptLineItem("Chleb", SpendCategory.JEDZENIE_SREDNIE,
+                new BigDecimal("5.00"), null);
+        marchOtherCategory.setReceipt(march);
+        entityManager.persist(marchOtherCategory);
+
+        // Same category, wrong month -> excluded.
+        Receipt april = Receipt.newCameraUpload("2026/04/a.jpg", Instant.parse("2026-04-01T09:00:00Z"));
+        april.setStatus(ReceiptStatus.PROCESSED);
+        entityManager.persist(april);
+        ReceiptLineItem aprilAlko = new ReceiptLineItem("Piwo", SpendCategory.ALKO, new BigDecimal("10.00"), null);
+        aprilAlko.setReceipt(april);
+        entityManager.persist(aprilAlko);
+
+        // Same category/month, still PENDING -> excluded (only PROCESSED receipts have reliable
+        // line items, matching /spending/summary's rule).
+        Receipt marchPending = Receipt.newCameraUpload("2026/03/b.jpg", Instant.parse("2026-03-15T09:00:00Z"));
+        entityManager.persist(marchPending);
+        ReceiptLineItem pendingAlko = new ReceiptLineItem("Piwo", SpendCategory.ALKO, new BigDecimal("99.00"), null);
+        pendingAlko.setReceipt(marchPending);
+        entityManager.persist(pendingAlko);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        var results = lineItemRepository.findForSpendingDrilldown(ReceiptStatus.PROCESSED, SpendCategory.ALKO,
+                Instant.parse("2026-03-01T00:00:00Z"), Instant.parse("2026-04-01T00:00:00Z"));
+
+        assertThat(results).extracting(ReceiptLineItem::getProductName).containsExactly("Wino");
+        assertThat(results.get(0).getReceipt().getStoreName()).isEqualTo("Biedronka");
+    }
+
+    /** Covers ReceiptLineItemRepository.findSubcategoryLabelRows backing GET /receipts/subcategory-labels. */
+    @Test
+    void findSubcategoryLabelRowsExcludesBlankSubcategoryAndIncludesEveryStatus() {
+        Receipt processed = Receipt.newCameraUpload("2026/06/a.jpg", Instant.parse("2026-06-01T10:00:00Z"));
+        processed.setStatus(ReceiptStatus.PROCESSED);
+        processed.setProcessedAt(Instant.now());
+        entityManager.persist(processed);
+        ReceiptLineItem withLabel = new ReceiptLineItem("Żelki", SpendCategory.JEDZENIE_PIERDOLOWATE,
+                new BigDecimal("4.50"), null, "Słodycze", "żelki");
+        withLabel.setReceipt(processed);
+        entityManager.persist(withLabel);
+
+        // A still-PENDING receipt's label must still count (labels are worth reminding Claude of
+        // regardless of the owning receipt's status).
+        Receipt pending = Receipt.newCameraUpload("2026/06/b.jpg", Instant.parse("2026-06-02T10:00:00Z"));
+        entityManager.persist(pending);
+        ReceiptLineItem pendingLabel = new ReceiptLineItem("Chipsy", SpendCategory.JEDZENIE_PIERDOLOWATE,
+                new BigDecimal("6.00"), null, "Chipsy", null);
+        pendingLabel.setReceipt(pending);
+        entityManager.persist(pendingLabel);
+
+        // Blank/NULL subcategory must never surface.
+        ReceiptLineItem blankSubcategory = new ReceiptLineItem("Mleko", SpendCategory.JEDZENIE_KONIECZNE,
+                new BigDecimal("3.00"), null, "   ", null);
+        blankSubcategory.setReceipt(processed);
+        entityManager.persist(blankSubcategory);
+        ReceiptLineItem nullSubcategory = new ReceiptLineItem("Ser", SpendCategory.JEDZENIE_SREDNIE,
+                new BigDecimal("8.00"), null);
+        nullSubcategory.setReceipt(processed);
+        entityManager.persist(nullSubcategory);
+
+        entityManager.flush();
+        entityManager.clear();
+
+        var rows = lineItemRepository.findSubcategoryLabelRows();
+
+        assertThat(rows).extracting(pl.receipts.repository.projection.SubcategoryLabelRow::getSubcategory)
+                .containsExactlyInAnyOrder("Słodycze", "Chipsy");
+    }
+
     @Test
     void sumAmountByReceiptIdReturnsZeroWhenNoLineItems() {
         Receipt receipt = Receipt.newCameraUpload("2026/05/d.jpg", Instant.now());

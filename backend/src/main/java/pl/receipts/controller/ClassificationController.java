@@ -8,14 +8,16 @@ import org.springframework.web.bind.annotation.RestController;
 import pl.receipts.dto.classification.ClassificationBatchRequest;
 import pl.receipts.dto.classification.ClassificationBatchResponse;
 import pl.receipts.dto.receipt.PendingReceiptsResponse;
+import pl.receipts.dto.receipt.SubcategoryLabelsResponse;
 import pl.receipts.service.ClassificationBatchService;
 import pl.receipts.service.ReceiptService;
 
 /**
- * The two endpoints owned by infra/classify/classify-receipts.sh's daily run — see CLAUDE.md
- * § Daily classification job. Split out from {@link ReceiptController} purely for ownership
- * clarity (matches docs/openapi.yaml's [classification] tag); URLs still live under
- * /api/receipts per the OpenAPI paths.
+ * The three endpoints owned by infra/classify/classify-receipts.sh's daily run — see CLAUDE.md
+ * § Daily classification job and, for the newest of the three, ADR-010 § Cross-batch label
+ * consistency. Split out from {@link ReceiptController} purely for ownership clarity (matches
+ * docs/openapi.yaml's [classification] tag); URLs still live under /api/receipts per the OpenAPI
+ * paths.
  */
 @RestController
 @RequestMapping("/api/receipts")
@@ -33,6 +35,11 @@ public class ClassificationController {
     @GetMapping("/pending")
     public PendingReceiptsResponse pending() {
         return receiptService.listPending();
+    }
+
+    @GetMapping("/subcategory-labels")
+    public SubcategoryLabelsResponse subcategoryLabels() {
+        return receiptService.listSubcategoryLabels();
     }
 
     @PostMapping("/classification-batch")

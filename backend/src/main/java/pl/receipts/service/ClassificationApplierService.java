@@ -66,7 +66,8 @@ public class ClassificationApplierService {
                 return markFailed(receipt, invalidReason);
             }
             SpendCategory category = SpendCategory.tryParse(input.category()).orElseThrow();
-            parsed.add(new ReceiptLineItem(input.productName(), category, input.amount(), input.quantity()));
+            parsed.add(new ReceiptLineItem(input.productName(), category, input.amount(), input.quantity(),
+                    input.subcategory(), input.subSubcategory()));
         }
 
         // Durably mark PROCESSING before the risky delete+insert work, so a mid-batch crash

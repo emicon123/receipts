@@ -10,8 +10,10 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import pl.receipts.entity.ReceiptLineItem;
 import pl.receipts.entity.ReceiptStatus;
+import pl.receipts.entity.SpendCategory;
 import pl.receipts.repository.projection.CategoryTotalRow;
 import pl.receipts.repository.projection.MonthCategoryTotalRow;
+import pl.receipts.repository.projection.SubcategoryLabelRow;
 
 public interface ReceiptLineItemRepository extends JpaRepository<ReceiptLineItem, Long> {
 
@@ -51,4 +53,42 @@ public interface ReceiptLineItemRepository extends JpaRepository<ReceiptLineItem
     List<MonthCategoryTotalRow> sumByMonthAndCategory(@Param("status") ReceiptStatus status,
                                                         @Param("from") Instant from,
                                                         @Param("to") Instant to);
+
+    /**
+     * Backs GET /spending/line-items (ADR-010 §3) — one category/month's line items, flat,
+     * ordered by the parent receipt's {@code capturedAt} descending then line-item {@code id}
+     * ascending (matches docs/openapi.yaml's documented sort). {@code JOIN FETCH} avoids an N+1
+     * when the mapper reads {@code receiptId}/{@code storeName}/{@code capturedAt} off the parent
+     * receipt. Same PROCESSED-only scope as {@code sumByCategory}/{@code sumByMonthAndCategory} —
+     * PENDING/FAILED receipts don't have reliable line items.
+     */
+    @Query("""
+            SELECT li FROM ReceiptLineItem li JOIN FETCH li.receipt r
+            WHERE r.status = :status AND li.category = :category
+              AND r.capturedAt >= :from AND r.capturedAt < :to
+            ORDER BY r.capturedAt DESC, li.id ASC
+            """)
+    List<ReceiptLineItem> findForSpendingDrilldown(@Param("status") ReceiptStatus status,
+                                                    @Param("category") SpendCategory category,
+                                                    @Param("from") Instant from,
+                                                    @Param("to") Instant to);
+
+    /**
+     * Backs GET /receipts/subcategory-labels — see
+     * docs/architecture/02-domain-model-and-schema.md § Known Subcategory/Sub-Subcategory Labels
+     * for the full rule set and {@link pl.receipts.service.SubcategoryLabelGrouper} for the
+     * normalize/rank/cap/group logic applied to this flat projection in the service layer (that
+     * doc explicitly sanctions doing this in Java over a two-level-nested SQL CTE). No
+     * {@code status}/{@code source} filter — every receipt's labels count, same reasoning as
+     * {@code findStoreNameSuggestions}. Only the {@code subcategory}-blank filter happens here;
+     * a blank/null {@code subSubcategory} is filtered out in the grouper, since a subcategory can
+     * be known even when no sub-subcategory has ever accompanied it.
+     */
+    @Query("""
+            SELECT li.category AS category, li.subcategory AS subcategory,
+                   li.subSubcategory AS subSubcategory, r.capturedAt AS capturedAt
+            FROM ReceiptLineItem li JOIN li.receipt r
+            WHERE li.subcategory IS NOT NULL AND trim(li.subcategory) <> ''
+            """)
+    List<SubcategoryLabelRow> findSubcategoryLabelRows();
 }

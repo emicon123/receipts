@@ -1,4 +1,4 @@
-import type { ListReceiptsParams } from "@/lib/types";
+import type { ListReceiptsParams, SpendCategory } from "@/lib/types";
 
 export const categoriesKeys = {
   all: ["categories"] as const,
@@ -19,4 +19,6 @@ export const spendingKeys = {
   summary: (year: number, month: number) =>
     [...spendingKeys.all, "summary", year, month] as const,
   trend: (year: number) => [...spendingKeys.all, "trend", year] as const,
+  lineItems: (year: number, month: number, category: SpendCategory) =>
+    [...spendingKeys.all, "line-items", year, month, category] as const,
 };

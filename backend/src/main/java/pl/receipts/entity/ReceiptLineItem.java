@@ -53,6 +53,20 @@ public class ReceiptLineItem {
     @Column(name = "quantity", precision = 10, scale = 3)
     private BigDecimal quantity;
 
+    /**
+     * Free-text, classifier-assigned, one level finer than {@code category} — see ADR-010.
+     * Deliberately NOT covered by {@code corrected}'s sticky protection (ADR-010 §4): a
+     * classification-batch replace overwrites this on every line item it touches, including one
+     * whose {@code category}/{@code amount}/{@code productName} the user has hand-corrected,
+     * since there is no edit UI for this field yet to protect.
+     */
+    @Column(name = "subcategory", length = 100)
+    private String subcategory;
+
+    /** Same nullability/no-validation/no-{@code corrected}-protection rules as {@link #subcategory}. */
+    @Column(name = "sub_subcategory", length = 100)
+    private String subSubcategory;
+
     @Column(name = "corrected", nullable = false)
     private boolean corrected = false;
 
@@ -66,5 +80,12 @@ public class ReceiptLineItem {
         this.quantity = quantity;
         this.corrected = false;
         this.createdAt = Instant.now();
+    }
+
+    public ReceiptLineItem(String productName, SpendCategory category, BigDecimal amount, BigDecimal quantity,
+                            String subcategory, String subSubcategory) {
+        this(productName, category, amount, quantity);
+        this.subcategory = subcategory;
+        this.subSubcategory = subSubcategory;
     }
 }

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { CategoryBreakdownChart } from "@/components/dashboard/CategoryBreakdownChart";
 import { CategoryTrendGrid } from "@/components/dashboard/CategoryTrendGrid";
@@ -9,13 +10,21 @@ import { useCategories } from "@/hooks/useCategories";
 import { useSpendingSummary } from "@/hooks/useSpendingSummary";
 import { useSpendingTrend } from "@/hooks/useSpendingTrend";
 import { formatCurrency } from "@/lib/utils";
+import type { SpendCategory } from "@/lib/types";
 
 const today = new Date();
 
 export function DashboardRoute() {
+  const navigate = useNavigate();
   const [summaryYear, setSummaryYear] = useState(today.getFullYear());
   const [summaryMonth, setSummaryMonth] = useState(today.getMonth() + 1);
   const [trendYear, setTrendYear] = useState(today.getFullYear());
+
+  function goToCategoryDrilldown(category: SpendCategory) {
+    navigate(
+      `/dashboard/category/${encodeURIComponent(category)}?year=${summaryYear}&month=${summaryMonth}`,
+    );
+  }
 
   const { data: categories, isPending: categoriesPending } = useCategories();
   const summary = useSpendingSummary(summaryYear, summaryMonth);
@@ -55,7 +64,11 @@ export function DashboardRoute() {
                   {formatCurrency(summary.data.totalAmount)}
                 </p>
               </div>
-              <CategoryBreakdownChart categories={categories} amounts={summary.data.categories} />
+              <CategoryBreakdownChart
+                categories={categories}
+                amounts={summary.data.categories}
+                onCategorySelect={goToCategoryDrilldown}
+              />
             </>
           )}
         </TabsContent>

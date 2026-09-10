@@ -12,6 +12,7 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pl.receipts.dto.spending.CategoryAmount;
+import pl.receipts.dto.spending.SpendingLineItemsResponse;
 import pl.receipts.dto.spending.SpendingMonth;
 import pl.receipts.dto.spending.SpendingSummaryData;
 import pl.receipts.dto.spending.SpendingSummaryResponse;
@@ -19,6 +20,7 @@ import pl.receipts.dto.spending.SpendingTrendData;
 import pl.receipts.dto.spending.SpendingTrendResponse;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.entity.SpendCategory;
+import pl.receipts.mapper.LineItemMapper;
 import pl.receipts.repository.ReceiptLineItemRepository;
 import pl.receipts.repository.projection.CategoryTotalRow;
 import pl.receipts.repository.projection.MonthCategoryTotalRow;
@@ -41,10 +43,13 @@ public class SpendingService {
 
     private final ReceiptLineItemRepository lineItemRepository;
     private final CategoryCatalogService categoryCatalog;
+    private final LineItemMapper lineItemMapper;
 
-    public SpendingService(ReceiptLineItemRepository lineItemRepository, CategoryCatalogService categoryCatalog) {
+    public SpendingService(ReceiptLineItemRepository lineItemRepository, CategoryCatalogService categoryCatalog,
+                            LineItemMapper lineItemMapper) {
         this.lineItemRepository = lineItemRepository;
         this.categoryCatalog = categoryCatalog;
+        this.lineItemMapper = lineItemMapper;
     }
 
     @Transactional(readOnly = true)
@@ -96,5 +101,22 @@ public class SpendingService {
         }
 
         return new SpendingTrendResponse(new SpendingTrendData(year, months));
+    }
+
+    /**
+     * Backs GET /spending/line-items (ADR-010 §3) — the dashboard's category drill-down, fetched
+     * lazily only when the user clicks a category bar (never eagerly alongside {@link #summary}).
+     * Same PROCESSED-only scope as {@link #summary}/{@link #trend}; unpaginated, flat, ordered by
+     * the parent receipt's {@code capturedAt} descending then line-item {@code id} ascending (see
+     * {@link ReceiptLineItemRepository#findForSpendingDrilldown}).
+     */
+    @Transactional(readOnly = true)
+    public SpendingLineItemsResponse lineItems(int year, int month, SpendCategory category) {
+        ZonedDateTime start = ZonedDateTime.of(year, month, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+        Instant from = start.toInstant();
+        Instant to = start.plusMonths(1).toInstant();
+
+        var entities = lineItemRepository.findForSpendingDrilldown(ReceiptStatus.PROCESSED, category, from, to);
+        return new SpendingLineItemsResponse(lineItemMapper.toSpendingLineItemList(entities));
     }
 }

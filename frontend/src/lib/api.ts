@@ -11,6 +11,8 @@ import type {
   ReceiptDetail,
   ReceiptSummary,
   ReprocessRequest,
+  SpendCategory,
+  SpendingLineItem,
   SpendingSummaryData,
   SpendingTrendData,
 } from "@/lib/types";
@@ -161,6 +163,22 @@ export async function getSpendingSummary(
 export async function getSpendingTrend(year: number): Promise<SpendingTrendData> {
   const { data } = await apiClient.get<Envelope<SpendingTrendData>>("/spending/trend", {
     params: { year },
+  });
+  return data.data;
+}
+
+/**
+ * Dashboard category drill-down (ADR-010) — a flat list of one category/month's line items,
+ * fetched lazily only when the user clicks a category bar. Grouping by subcategory/
+ * subSubcategory happens entirely client-side (see CategoryLineItemGroups).
+ */
+export async function getSpendingLineItems(
+  year: number,
+  month: number,
+  category: SpendCategory,
+): Promise<SpendingLineItem[]> {
+  const { data } = await apiClient.get<Envelope<SpendingLineItem[]>>("/spending/line-items", {
+    params: { year, month, category },
   });
   return data.data;
 }

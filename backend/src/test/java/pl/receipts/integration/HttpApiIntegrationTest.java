@@ -116,4 +116,62 @@ class HttpApiIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.length()").value(11));
     }
+
+    /** ADR-010 §3 — manual entry accepts subcategory/subSubcategory and echoes them back. */
+    @Test
+    void manualEntryWithSubcategoryFieldsPersistsThem() throws Exception {
+        mockMvc.perform(post("/api/receipts/manual")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "capturedAt": "2026-08-20T09:00:00Z",
+                                  "storeName": "Zabka",
+                                  "lineItems": [
+                                    { "productName": "Żelki", "category": "JEDZENIE_PIERDOLOWATE",
+                                      "amount": 4.50, "subcategory": "Słodycze", "subSubcategory": "żelki" }
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.lineItems[0].subcategory").value("Słodycze"))
+                .andExpect(jsonPath("$.data.lineItems[0].subSubcategory").value("żelki"));
+    }
+
+    /** ADR-010 §3 — GET /spending/line-items, the dashboard's category drill-down endpoint. */
+    @Test
+    void spendingLineItemsReturnsScopedItemsViaHttp() throws Exception {
+        mockMvc.perform(post("/api/receipts/manual")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "capturedAt": "2026-05-05T09:00:00Z",
+                                  "storeName": "Lidl",
+                                  "lineItems": [
+                                    { "productName": "Wino", "category": "ALKO", "amount": 25.00 }
+                                  ]
+                                }
+                                """))
+                .andExpect(status().isCreated());
+
+        mockMvc.perform(get("/api/spending/line-items")
+                        .param("year", "2026").param("month", "5").param("category", "ALKO"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].productName").value("Wino"))
+                .andExpect(jsonPath("$.data[0].storeName").value("Lidl"));
+    }
+
+    @Test
+    void spendingLineItemsMissingCategoryReturns400() throws Exception {
+        mockMvc.perform(get("/api/spending/line-items").param("year", "2026").param("month", "5"))
+                .andExpect(status().isBadRequest());
+    }
+
+    /** ADR-010 § Cross-batch label consistency — GET /receipts/subcategory-labels shape. */
+    @Test
+    void subcategoryLabelsEndpointReturns200WithEnvelope() throws Exception {
+        mockMvc.perform(get("/api/receipts/subcategory-labels"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray())
+                .andExpect(jsonPath("$.meta.requestId").exists());
+    }
 }

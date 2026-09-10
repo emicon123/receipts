@@ -12,5 +12,16 @@ import java.math.BigDecimal;
  * actually validated, per-receipt.
  */
 public record ClassificationLineItemInput(String productName, String category, BigDecimal amount,
-                                           BigDecimal quantity) {
+                                           BigDecimal quantity, String subcategory, String subSubcategory) {
+
+    /**
+     * Convenience constructor for the pre-ADR-010 4-arg call shape (an older prompt/script
+     * version, or a test, that omits subcategory/subSubcategory) — both fields simply come
+     * through as {@code null}, which is always valid (ADR-010: omission must never fail
+     * validation).
+     */
+    public ClassificationLineItemInput(String productName, String category, BigDecimal amount,
+                                        BigDecimal quantity) {
+        this(productName, category, amount, quantity, null, null);
+    }
 }

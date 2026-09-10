@@ -24,5 +24,16 @@ public record LineItemInput(
         @NotBlank @Size(max = 300) String productName,
         @NotBlank @ValidCategory String category,
         @NotNull @DecimalMin(value = "0.0") BigDecimal amount,
-        @DecimalMin(value = "0.0", inclusive = false) BigDecimal quantity) {
+        @DecimalMin(value = "0.0", inclusive = false) BigDecimal quantity,
+        @Size(max = 100) String subcategory,
+        @Size(max = 100) String subSubcategory) {
+
+    /**
+     * Convenience constructor for the common (pre-ADR-010) 4-arg call shape — existing callers
+     * (manual entry today has no UI for these two fields) and tests that don't care about
+     * subcategory/subSubcategory stay unchanged; both simply persist as {@code null} (ADR-010).
+     */
+    public LineItemInput(String productName, String category, BigDecimal amount, BigDecimal quantity) {
+        this(productName, category, amount, quantity, null, null);
+    }
 }

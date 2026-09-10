@@ -18,6 +18,9 @@ const ManualEntryRoute = lazy(() =>
 const DashboardRoute = lazy(() =>
   import("@/routes/DashboardRoute").then((m) => ({ default: m.DashboardRoute })),
 );
+const CategoryDrilldownRoute = lazy(() =>
+  import("@/routes/CategoryDrilldownRoute").then((m) => ({ default: m.CategoryDrilldownRoute })),
+);
 
 function RouteFallback() {
   return <p className="p-4 text-center text-sm text-muted-foreground">Ładowanie…</p>;
@@ -32,6 +35,7 @@ export function App() {
         <Route path="/receipts/manual" element={<ManualEntryRoute />} />
         <Route path="/receipts/:id" element={<ReceiptDetailRoute />} />
         <Route path="/dashboard" element={<DashboardRoute />} />
+        <Route path="/dashboard/category/:category" element={<CategoryDrilldownRoute />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>

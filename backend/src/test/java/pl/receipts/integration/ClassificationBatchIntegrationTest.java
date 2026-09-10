@@ -89,6 +89,24 @@ class ClassificationBatchIntegrationTest extends AbstractIntegrationTest {
         assertThat(detail.totalAmount()).isEqualByComparingTo("8.00");
     }
 
+    /** Idempotent resubmission (existing rule) still holds with subcategory fields present. */
+    @Test
+    void resubmittingTheSameBatchWithSubcategoryFieldsIsStillIdempotent() throws Exception {
+        Long id = upload();
+        var request = new ClassificationBatchRequest(
+                List.of(new ClassificationBatchItem(id, "Sklep", null, List.of(
+                        new ClassificationLineItemInput("Żelki", "JEDZENIE_PIERDOLOWATE", new BigDecimal("5.00"),
+                                null, "Słodycze", "żelki")))),
+                List.of());
+
+        classificationBatchService.submit(request);
+        classificationBatchService.submit(request); // resubmit unchanged
+
+        ReceiptDetail detail = receiptService.getDetail(id);
+        assertThat(detail.lineItems()).hasSize(1); // not duplicated
+        assertThat(detail.lineItems().get(0).subcategory()).isEqualTo("Słodycze");
+    }
+
     @Test
     void failuresArrayMarksReceiptFailedWithReason() throws Exception {
         Long id = upload();
@@ -101,6 +119,48 @@ class ClassificationBatchIntegrationTest extends AbstractIntegrationTest {
         ReceiptDetail detail = receiptService.getDetail(id);
         assertThat(detail.status()).isEqualTo(ReceiptStatus.FAILED);
         assertThat(detail.failureReason()).isEqualTo("photo too blurry to read");
+    }
+
+    /**
+     * ADR-010: the classification-batch path must accept subcategory/subSubcategory when the
+     * classifier sends them, and store them verbatim.
+     */
+    @Test
+    void batchWithSubcategoryFieldsPersistsThem() throws Exception {
+        Long id = upload();
+        var request = new ClassificationBatchRequest(
+                List.of(new ClassificationBatchItem(id, "Zabka", null, List.of(
+                        new ClassificationLineItemInput("Żelki", "JEDZENIE_PIERDOLOWATE", new BigDecimal("4.50"),
+                                null, "Słodycze", "żelki")))),
+                List.of());
+
+        classificationBatchService.submit(request);
+
+        ReceiptDetail detail = receiptService.getDetail(id);
+        assertThat(detail.lineItems()).hasSize(1);
+        assertThat(detail.lineItems().get(0).subcategory()).isEqualTo("Słodycze");
+        assertThat(detail.lineItems().get(0).subSubcategory()).isEqualTo("żelki");
+    }
+
+    /**
+     * ADR-010: an older prompt/script version omitting subcategory/subSubcategory (the 4-arg
+     * call shape) must not fail validation — both simply persist as NULL.
+     */
+    @Test
+    void batchWithoutSubcategoryFieldsStillSucceedsAndPersistsNull() throws Exception {
+        Long id = upload();
+        var request = new ClassificationBatchRequest(
+                List.of(new ClassificationBatchItem(id, null, null, List.of(
+                        new ClassificationLineItemInput("Mleko", "JEDZENIE_KONIECZNE", new BigDecimal("3.00"),
+                                null)))),
+                List.of());
+
+        var result = classificationBatchService.submit(request);
+
+        assertThat(result.processed()).containsExactly(id);
+        ReceiptDetail detail = receiptService.getDetail(id);
+        assertThat(detail.lineItems().get(0).subcategory()).isNull();
+        assertThat(detail.lineItems().get(0).subSubcategory()).isNull();
     }
 
     @Test
