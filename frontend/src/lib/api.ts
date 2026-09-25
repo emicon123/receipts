@@ -13,6 +13,7 @@ import type {
   ReprocessRequest,
   SpendCategory,
   SpendingLineItem,
+  SpendingSubcategorySummaryData,
   SpendingSummaryData,
   SpendingTrendData,
 } from "@/lib/types";
@@ -164,6 +165,22 @@ export async function getSpendingTrend(year: number): Promise<SpendingTrendData>
   const { data } = await apiClient.get<Envelope<SpendingTrendData>>("/spending/trend", {
     params: { year },
   });
+  return data.data;
+}
+
+/**
+ * Per-category subcategory breakdown for the dashboard's "Szczegóły" stacked-bar mode (ADR-013).
+ * Fetched lazily, only once that mode is selected. The server returns the full sorted list per
+ * category; top-N + "Reszta" bucketing happens client-side (see lib/subcategoryBuckets).
+ */
+export async function getSpendingSubcategorySummary(
+  year: number,
+  month: number,
+): Promise<SpendingSubcategorySummaryData> {
+  const { data } = await apiClient.get<Envelope<SpendingSubcategorySummaryData>>(
+    "/spending/subcategory-summary",
+    { params: { year, month } },
+  );
   return data.data;
 }
 

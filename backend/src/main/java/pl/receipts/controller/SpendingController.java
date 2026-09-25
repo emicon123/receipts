@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import pl.receipts.dto.spending.SpendingLineItemsResponse;
+import pl.receipts.dto.spending.SpendingSubcategorySummaryResponse;
 import pl.receipts.dto.spending.SpendingSummaryResponse;
 import pl.receipts.dto.spending.SpendingTrendResponse;
 import pl.receipts.entity.SpendCategory;
@@ -33,6 +34,12 @@ public class SpendingController {
     @GetMapping("/trend")
     public SpendingTrendResponse trend(@RequestParam @Min(2000) @Max(2100) int year) {
         return spendingService.trend(year);
+    }
+
+    @GetMapping("/subcategory-summary")
+    public SpendingSubcategorySummaryResponse subcategorySummary(@RequestParam @Min(2000) @Max(2100) int year,
+                                                                 @RequestParam @Min(1) @Max(12) int month) {
+        return spendingService.subcategorySummary(year, month);
     }
 
     @GetMapping("/line-items")

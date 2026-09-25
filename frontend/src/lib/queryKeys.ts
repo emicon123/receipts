@@ -18,6 +18,8 @@ export const spendingKeys = {
   all: ["spending"] as const,
   summary: (year: number, month: number) =>
     [...spendingKeys.all, "summary", year, month] as const,
+  subcategorySummary: (year: number, month: number) =>
+    [...spendingKeys.all, "subcategory-summary", year, month] as const,
   trend: (year: number) => [...spendingKeys.all, "trend", year] as const,
   lineItems: (year: number, month: number, category: SpendCategory) =>
     [...spendingKeys.all, "line-items", year, month, category] as const,

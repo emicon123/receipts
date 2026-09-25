@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { CategoryBreakdownChart } from "@/components/dashboard/CategoryBreakdownChart";
 import { CategoryTrendGrid } from "@/components/dashboard/CategoryTrendGrid";
 import { MonthPicker } from "@/components/dashboard/MonthPicker";
+import { SubcategoryBreakdownPanel } from "@/components/dashboard/SubcategoryBreakdownPanel";
 import { YearPicker } from "@/components/dashboard/YearPicker";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCategories } from "@/hooks/useCategories";
@@ -14,8 +15,31 @@ import type { SpendCategory } from "@/lib/types";
 
 const today = new Date();
 
+/** Summary-tab view, kept in the URL (`?widok=szczegoly`) so a reload or browser-back from the
+ * drill-down restores it. "Kategorie" (plain bars) is the default and has no param. */
+type SummaryView = "kategorie" | "szczegoly";
+const VIEW_PARAM = "widok";
+
+function parseSummaryView(value: string | null): SummaryView {
+  return value === "szczegoly" ? "szczegoly" : "kategorie";
+}
+
 export function DashboardRoute() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const summaryView = parseSummaryView(searchParams.get(VIEW_PARAM));
+
+  function setSummaryView(view: string) {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (view === "szczegoly") next.set(VIEW_PARAM, "szczegoly");
+        else next.delete(VIEW_PARAM);
+        return next;
+      },
+      { replace: true },
+    );
+  }
   const [summaryYear, setSummaryYear] = useState(today.getFullYear());
   const [summaryMonth, setSummaryMonth] = useState(today.getMonth() + 1);
   const [trendYear, setTrendYear] = useState(today.getFullYear());
@@ -64,11 +88,31 @@ export function DashboardRoute() {
                   {formatCurrency(summary.data.totalAmount)}
                 </p>
               </div>
-              <CategoryBreakdownChart
-                categories={categories}
-                amounts={summary.data.categories}
-                onCategorySelect={goToCategoryDrilldown}
-              />
+              <Tabs value={summaryView} onValueChange={setSummaryView}>
+                <TabsList aria-label="Widok podsumowania" className="h-9 w-full">
+                  <TabsTrigger value="kategorie" className="py-1 text-xs">
+                    Kategorie
+                  </TabsTrigger>
+                  <TabsTrigger value="szczegoly" className="py-1 text-xs">
+                    Szczegóły
+                  </TabsTrigger>
+                </TabsList>
+                <TabsContent value="kategorie" className="mt-3">
+                  <CategoryBreakdownChart
+                    categories={categories}
+                    amounts={summary.data.categories}
+                    onCategorySelect={goToCategoryDrilldown}
+                  />
+                </TabsContent>
+                <TabsContent value="szczegoly" className="mt-3">
+                  <SubcategoryBreakdownPanel
+                    year={summaryYear}
+                    month={summaryMonth}
+                    categories={categories}
+                    onCategorySelect={goToCategoryDrilldown}
+                  />
+                </TabsContent>
+              </Tabs>
             </>
           )}
         </TabsContent>

@@ -48,6 +48,7 @@ resolves it through that same mechanism rather than using the backend's path ver
 | GET | `/api/spending/summary?year=&month=` | PWA | All 11 categories, zero-filled. |
 | GET | `/api/spending/trend?year=` | PWA | All 12 months, each zero-filled per category. |
 | GET | `/api/spending/line-items?year=&month=&category=` | PWA (drill-down, on click only) | Flat list of that category/month's line items (`productName`, `amount`, `quantity`, `subcategory`, `subSubcategory`, plus `receiptId`/`storeName`/`capturedAt` for display and linking back to the receipt). Unpaginated. A separate, lazily-fetched endpoint by design, not a nested field on `summary` — see ADR-010. Client groups by `subcategory` → `subSubcategory` itself; either may be `null`. |
+| GET | `/api/spending/subcategory-summary?year=&month=` | PWA (Wydatki "Szczegóły" mode, lazy) | All 11 categories (zero-filled, canonical order), each with `totalAmount`, `unlabeledAmount` (NULL/blank subcategory) and the **full** `subcategories[]` list of `{subcategory, amount}` sorted by amount desc, grouped by `lower(trim())`. Per-category totals equal `/spending/summary`'s. Top-N + "Reszta" is client-side. See § Subcategory breakdown below and ADR-013. |
 | GET | `/api/categories` | PWA | Static list (Polish label + gloss), canonical order. |
 | POST | `/api/bank/consent` | PWA (Settings) | **Design-only, ADR-007.** Initiates the PSD2 consent flow — returns a redirect URL. |
 | GET | `/api/bank/consent/callback` | PKO (browser redirect) | **Design-only, ADR-007.** OAuth2 authorization-code callback — not called by the PWA's JS. |
@@ -106,6 +107,32 @@ not a parallel schema per endpoint). Contract points that matter to Backend/Fron
   still advisory — nothing rejects a batch over a label that ignores the known list — it only
   changes what Claude is told, not what the backend accepts. See ADR-010 § Cross-batch label
   consistency.
+
+## Subcategory breakdown — `GET /spending/subcategory-summary` (ADR-013)
+
+Feeds the Wydatki dashboard's "Szczegóły" (stacked-bar) mode. Contract points that matter to
+Backend/Frontend:
+
+- **Lazy, second-tier call.** `GET /spending/summary` stays unchanged and is still the only
+  eager dashboard call ("Podsumowanie" mode). This endpoint is fetched only once the user
+  switches to "Szczegóły" — never on dashboard load, never 11× `/spending/line-items`.
+- **Same scope as `/spending/summary`** (`PROCESSED` only, same UTC month window), and the
+  totals must reconcile exactly: per category, `totalAmount == unlabeledAmount +
+  Σ subcategories[].amount == /spending/summary`'s amount for that category. Backend tests this
+  equality directly against the summary endpoint.
+- **All 11 categories, zero-filled, canonical order** — same convention as `/spending/summary`,
+  so the two responses zip index-for-index.
+- **Normalization reuses ADR-010 §5:** group by `lower(trim(subcategory))`, display the
+  most-used exact-cased variant *within this month's slice* (tie: most recent `capturedAt`, then
+  variant string asc). NULL/empty/whitespace-only subcategories go to `unlabeledAmount`, never to
+  a `subcategories[]` entry — so `subcategories[].subcategory` is always a non-blank string.
+- **Server returns the full, sorted list; the client buckets.** No top-N cut or "Reszta" entry
+  server-side. The frontend takes the top 3 labeled entries as shaded segments of one hue and
+  folds everything else, plus `unlabeledAmount`, into one grey "Reszta" segment (if the
+  remainder is exactly one labeled subcategory and `unlabeledAmount == 0`, that one is shown as a
+  4th shade instead of a one-item "Reszta"). The full list also feeds the accessible table
+  fallback. Rationale: ADR-013.
+- **No `subSubcategory` level** here — `/spending/line-items` remains the drill-down for that.
 
 ## Categories
 

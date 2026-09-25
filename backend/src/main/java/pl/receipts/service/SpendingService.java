@@ -12,8 +12,11 @@ import java.util.Map;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import pl.receipts.dto.spending.CategoryAmount;
+import pl.receipts.dto.spending.CategorySubcategoryBreakdown;
 import pl.receipts.dto.spending.SpendingLineItemsResponse;
 import pl.receipts.dto.spending.SpendingMonth;
+import pl.receipts.dto.spending.SpendingSubcategorySummaryData;
+import pl.receipts.dto.spending.SpendingSubcategorySummaryResponse;
 import pl.receipts.dto.spending.SpendingSummaryData;
 import pl.receipts.dto.spending.SpendingSummaryResponse;
 import pl.receipts.dto.spending.SpendingTrendData;
@@ -54,12 +57,11 @@ public class SpendingService {
 
     @Transactional(readOnly = true)
     public SpendingSummaryResponse summary(int year, int month) {
-        ZonedDateTime start = ZonedDateTime.of(year, month, 1, 0, 0, 0, 0, ZoneOffset.UTC);
-        Instant from = start.toInstant();
-        Instant to = start.plusMonths(1).toInstant();
+        MonthWindow window = MonthWindow.of(year, month);
 
         Map<SpendCategory, BigDecimal> totals = new EnumMap<>(SpendCategory.class);
-        for (CategoryTotalRow row : lineItemRepository.sumByCategory(ReceiptStatus.PROCESSED, from, to)) {
+        for (CategoryTotalRow row : lineItemRepository.sumByCategory(ReceiptStatus.PROCESSED, window.from(),
+                window.to())) {
             totals.put(row.getCategory(), row.getTotal());
         }
 
@@ -112,11 +114,39 @@ public class SpendingService {
      */
     @Transactional(readOnly = true)
     public SpendingLineItemsResponse lineItems(int year, int month, SpendCategory category) {
-        ZonedDateTime start = ZonedDateTime.of(year, month, 1, 0, 0, 0, 0, ZoneOffset.UTC);
-        Instant from = start.toInstant();
-        Instant to = start.plusMonths(1).toInstant();
+        MonthWindow window = MonthWindow.of(year, month);
 
-        var entities = lineItemRepository.findForSpendingDrilldown(ReceiptStatus.PROCESSED, category, from, to);
+        var entities = lineItemRepository.findForSpendingDrilldown(ReceiptStatus.PROCESSED, category,
+                window.from(), window.to());
         return new SpendingLineItemsResponse(lineItemMapper.toSpendingLineItemList(entities));
+    }
+
+    /**
+     * Backs GET /spending/subcategory-summary (ADR-013) — the Wydatki "Szczegóły" stacked bars,
+     * fetched lazily. Exactly {@link #summary}'s scope (PROCESSED only, same UTC month window),
+     * so each category's {@code totalAmount} equals the summary's amount for it; the
+     * normalize/merge/sort rules live in {@link SubcategorySpendingAggregator}.
+     */
+    @Transactional(readOnly = true)
+    public SpendingSubcategorySummaryResponse subcategorySummary(int year, int month) {
+        MonthWindow window = MonthWindow.of(year, month);
+
+        List<CategorySubcategoryBreakdown> categories = SubcategorySpendingAggregator.aggregate(
+                lineItemRepository.sumBySubcategoryVariant(ReceiptStatus.PROCESSED, window.from(), window.to()),
+                categoryCatalog.canonicalOrder());
+        BigDecimal total = categories.stream()
+                .map(CategorySubcategoryBreakdown::totalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return new SpendingSubcategorySummaryResponse(
+                new SpendingSubcategorySummaryData(year, month, total, categories));
+    }
+
+    /** {@code [first instant of the month, first instant of the next month)} in UTC. */
+    private record MonthWindow(Instant from, Instant to) {
+        static MonthWindow of(int year, int month) {
+            ZonedDateTime start = ZonedDateTime.of(year, month, 1, 0, 0, 0, 0, ZoneOffset.UTC);
+            return new MonthWindow(start.toInstant(), start.plusMonths(1).toInstant());
+        }
     }
 }

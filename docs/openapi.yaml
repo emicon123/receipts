@@ -646,6 +646,93 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
+  /spending/subcategory-summary:
+    get:
+      tags: [spending]
+      summary: Per-category amounts broken down by subcategory, for one month (stacked bars)
+      description: |
+        Powers the Wydatki dashboard's **"Szczegóły"** mode, where each category bar is split
+        into subcategory segments (see ADR-013). **Fetched lazily, only when the user switches
+        to "Szczegóły"** — `GET /spending/summary` stays unchanged and remains the only eager
+        dashboard call. Replaces what would otherwise be 11 calls to `/spending/line-items`
+        just to draw one chart.
+
+        **Scope:** identical to `/spending/summary` — `PROCESSED` receipts only, the same UTC
+        month boundaries on `capturedAt`. **Invariant (tested):** for every category,
+        `totalAmount == unlabeledAmount + Σ subcategories[].amount`, and `totalAmount` equals
+        that category's `amount` in `GET /spending/summary?year=&month=` for the same
+        year/month. Top-level `totalAmount` equals `/spending/summary`'s `totalAmount`.
+
+        **Always all 11 categories, zero-filled, in the same canonical order as
+        `GET /categories` / `/spending/summary`** — so the client can render this response
+        alone, or zip it index-for-index with the summary, without reconciling a partial list.
+        A category with no spend has `totalAmount: 0`, `unlabeledAmount: 0`, `subcategories: []`.
+
+        **Grouping/normalization (ADR-010 §5 rule, reused):** within a category, line items
+        are grouped by `lower(trim(subcategory))`, so "Słodycze" and "słodycze " form one
+        segment. The displayed `subcategory` string is the exact-cased variant with the most
+        line items within this month's slice, tie-broken by that variant's most recent
+        `capturedAt`, then by the variant string ascending (determinism).
+
+        **Unlabeled bucket:** line items whose `subcategory` is `NULL`, empty, or
+        whitespace-only (historical rows — ADR-010 has no backfill) are summed into the
+        category's `unlabeledAmount`, **not** into an entry of `subcategories[]`. `subcategory`
+        in `subcategories[]` is therefore never `null`/blank.
+
+        **Sort:** `subcategories[]` is ordered by `amount` descending, ties broken by the
+        normalized key ascending. The **full list** is returned — no top-N cut and no "Reszta"
+        bucket server-side; top-N + "Reszta" bucketing is a presentation decision made by the
+        client (ADR-013). `subSubcategory` is deliberately not broken down here (use
+        `/spending/line-items` for that level).
+
+        Unpaginated (bounded by 11 categories × a personal month's distinct labels, ~30 today).
+      operationId: getSpendingSubcategorySummary
+      parameters:
+        - name: year
+          in: query
+          required: true
+          schema: { type: integer, minimum: 2000, maximum: 2100 }
+        - name: month
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1, maximum: 12 }
+      responses:
+        "200":
+          description: Subcategory breakdown for every category in the month (all 11, zero-filled).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendingSubcategorySummaryResponse"
+              example:
+                data:
+                  year: 2026
+                  month: 9
+                  totalAmount: 186.40
+                  categories:
+                    - category: ALKO
+                      totalAmount: 0
+                      unlabeledAmount: 0
+                      subcategories: []
+                    - category: JEDZENIE_PIERDOLOWATE
+                      totalAmount: 86.40
+                      unlabeledAmount: 12.50
+                      subcategories:
+                        - { subcategory: "Słodycze", amount: 41.20 }
+                        - { subcategory: "Chipsy", amount: 19.80 }
+                        - { subcategory: "Napoje", amount: 12.90 }
+                    - category: JEDZENIE_SREDNIE
+                      totalAmount: 100.00
+                      unlabeledAmount: 0
+                      subcategories:
+                        - { subcategory: "Nabiał", amount: 55.00 }
+                        - { subcategory: "Pieczywo", amount: 45.00 }
+                    # ...remaining categories, zero-filled, in canonical order
+                meta:
+                  requestId: 3f1c2a9e-0b6d-4c1e-9a53-7d2e8f4b1a60
+                  timestamp: "2026-09-25T08:00:00Z"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   # ============================================================================
   # Categories
   # ============================================================================
@@ -1308,6 +1395,69 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/SpendingLineItem" }
+        meta: { $ref: "#/components/schemas/Meta" }
+
+    # ---- Subcategory breakdown (GET /spending/subcategory-summary, ADR-013) ----
+
+    SubcategoryAmount:
+      type: object
+      required: [subcategory, amount]
+      properties:
+        subcategory:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: |
+            Display label for one normalized (`lower(trim())`) subcategory group — the
+            most-used exact-cased variant in this month's slice. Never null/blank (those
+            line items go to the parent's `unlabeledAmount`).
+        amount:
+          type: number
+          format: double
+          description: Sum of `receipt_line_items.amount` for this group. Always > 0 in practice.
+
+    CategorySubcategoryBreakdown:
+      type: object
+      required: [category, totalAmount, unlabeledAmount, subcategories]
+      properties:
+        category: { $ref: "#/components/schemas/SpendCategory" }
+        totalAmount:
+          type: number
+          format: double
+          description: |
+            Equals `unlabeledAmount + Σ subcategories[].amount`, and equals this category's
+            `amount` in `GET /spending/summary` for the same year/month.
+        unlabeledAmount:
+          type: number
+          format: double
+          description: Sum for line items with a NULL/empty/whitespace-only `subcategory`. `0` when none.
+        subcategories:
+          type: array
+          items: { $ref: "#/components/schemas/SubcategoryAmount" }
+          description: Full list (no top-N cut), `amount` descending, ties by normalized key ascending.
+
+    SpendingSubcategorySummaryData:
+      type: object
+      required: [year, month, totalAmount, categories]
+      properties:
+        year: { type: integer }
+        month: { type: integer, minimum: 1, maximum: 12 }
+        totalAmount:
+          type: number
+          format: double
+          description: Equals `GET /spending/summary`'s `totalAmount` for the same year/month.
+        categories:
+          type: array
+          minItems: 11
+          maxItems: 11
+          items: { $ref: "#/components/schemas/CategorySubcategoryBreakdown" }
+          description: All 11 categories, zero-filled, canonical `GET /categories` order.
+
+    SpendingSubcategorySummaryResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data: { $ref: "#/components/schemas/SpendingSubcategorySummaryData" }
         meta: { $ref: "#/components/schemas/Meta" }
 
     # ============================================================================

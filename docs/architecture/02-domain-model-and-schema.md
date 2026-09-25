@@ -139,6 +139,8 @@ CREATE TYPE spend_category_enum AS ENUM (
   reasoning covers `GET /receipts/subcategory-labels` (see below) even though it scans **all**
   receipts rather than one month — a personal dataset's total row count is still low thousands
   at the outside, and this endpoint is called at most once per cron run, not a hot path.
+  `GET /spending/subcategory-summary` (ADR-013) uses the same month-window join as
+  `/spending/summary`, so it is covered by `idx_receipts_captured_at` as well.
 
 ## Store-Name Suggestions (`GET /receipts/store-names`)
 
@@ -287,6 +289,104 @@ more maintainable — the four numbered rules above are the actual contract, not
 receipts (not one month), but a personal dataset's total row count stays in the low thousands,
 and it is called at most once per `classify-receipts.sh` run — not a hot path.
 
+## Subcategory Spending Breakdown (`GET /spending/subcategory-summary`)
+
+Feeds the Wydatki dashboard's "Szczegóły" stacked bars (ADR-013). Full contract in
+`docs/openapi.yaml`; this section fixes the query shape and class structure.
+
+1. **Filter:** same as `/spending/summary` — `receipts.status = 'PROCESSED'` and
+   `captured_at` in `[monthStart, nextMonthStart)` UTC.
+2. **Aggregate in SQL by exact variant:** `GROUP BY li.category, li.subcategory` returning
+   `(category, subcategory, SUM(amount) AS total, COUNT(*) AS itemCount,
+   MAX(r.captured_at) AS lastCapturedAt)`. At personal scale this is tens of rows per month.
+3. **Normalize in Java** (same rule as § Known Subcategory/Sub-Subcategory Labels step 2): rows
+   whose `subcategory` is NULL or trims to `''` add to the category's `unlabeledAmount`; the rest
+   merge by `lower(trim(subcategory))`, summing `total`.
+4. **Display casing per group:** the exact variant with the highest `itemCount`, tie-broken by
+   its `lastCapturedAt` desc, then variant string asc. Scoped to this month's rows (not global
+   history) — keeps the endpoint one query; a rare month where a lower-cased variant dominates
+   just displays that casing.
+5. **Assemble:** all 11 categories in `CategoryCatalogService.canonicalOrder()`, zero-filled;
+   `subcategories` sorted by amount desc then normalized key asc; category
+   `totalAmount = unlabeledAmount + Σ amounts` (`BigDecimal`, no rounding — so it equals
+   `sumByCategory`'s `SUM` exactly); top-level `totalAmount = Σ category totals`.
+
+```mermaid
+classDiagram
+    direction LR
+    class SpendingController {
+        +subcategorySummary(year, month) SpendingSubcategorySummaryResponse
+    }
+    class SpendingService {
+        +subcategorySummary(year, month) SpendingSubcategorySummaryResponse
+    }
+    class ReceiptLineItemRepository {
+        <<Repository>>
+        +sumBySubcategoryVariant(status, from, to) List~SubcategoryVariantTotalRow~
+    }
+    class SubcategoryVariantTotalRow {
+        <<projection>>
+        +getCategory() SpendCategory
+        +getSubcategory() String
+        +getTotal() BigDecimal
+        +getItemCount() long
+        +getLastCapturedAt() Instant
+    }
+    class SubcategorySpendingAggregator {
+        <<pure, static>>
+        +aggregate(rows, canonicalOrder) List~CategorySubcategoryBreakdown~
+    }
+    class LabelNormalization {
+        <<pure, static, package-private>>
+        +normalize(String) String
+        +pickDisplayCasing(variants) String
+    }
+    class SubcategoryLabelGrouper {
+        <<pure, static>>
+    }
+    class CategorySubcategoryBreakdown {
+        <<record DTO>>
+        category
+        totalAmount
+        unlabeledAmount
+        subcategories : List~SubcategoryAmount~
+    }
+    class SubcategoryAmount {
+        <<record DTO>>
+        subcategory
+        amount
+    }
+    SpendingController --> SpendingService
+    SpendingService --> ReceiptLineItemRepository
+    SpendingService --> SubcategorySpendingAggregator
+    ReceiptLineItemRepository ..> SubcategoryVariantTotalRow
+    SubcategorySpendingAggregator ..> LabelNormalization
+    SubcategoryLabelGrouper ..> LabelNormalization
+    SubcategorySpendingAggregator ..> CategorySubcategoryBreakdown
+    CategorySubcategoryBreakdown *-- SubcategoryAmount
+```
+
+**Legend / patterns applied:**
+- **Repository + projection** (existing seam) — one new aggregate query on
+  `ReceiptLineItemRepository`, same style as `sumByCategory`.
+- **Transaction Script** — `SpendingService.subcategorySummary` computes the month window exactly
+  as `summary()` does (extract that inline UTC-window computation into a private helper both
+  call, rather than copying it) and delegates the pure
+  merging to the aggregator.
+- **SRP + DRY** — `SubcategorySpendingAggregator` is a new dependency-free class (unit-testable
+  without Testcontainers, same rationale as `SubcategoryLabelGrouper`) because *summing amounts*
+  is a different responsibility from *ranking labels by usage*. The one thing they genuinely
+  share — `normalize()` and "most-used casing, tie by recency" — is extracted from
+  `SubcategoryLabelGrouper`'s private methods into a small package-private `LabelNormalization`
+  helper that both call, so the ADR-010 §5 rule lives in exactly one place.
+- **DTOs** are plain Java records mirroring the OpenAPI schemas (`SubcategoryAmount`,
+  `CategorySubcategoryBreakdown`, `SpendingSubcategorySummaryData`,
+  `SpendingSubcategorySummaryResponse`) in `pl.receipts.dto.spending`; no entity crosses the API.
+- **Rejected:** a generic "group-by-any-label" framework, Strategy for bucketing, or doing top-N
+  in the service — see ADR-013.
+
+**No new index** — same month-window join as `/spending/summary`, same data scale.
+
 ---
 
 ## Pattern & Principle Evaluation
@@ -311,6 +411,9 @@ repeated per endpoint, since the same reasoning applies uniformly across this ap
 | Free-text `subcategory`/`sub_subcategory` columns vs. a second enum/lookup table (ADR-010) | **adopted (free-text)** | Unlike `spend_category_enum`'s closed 11-value list (ADR-005), these are classifier-generated groupings with no user-given closed list — a fixed enum can't be extended without a migration every time a new grouping emerges, which defeats the point; a lookup table would need the same CRUD machinery ADR-005 already rejected for the main category. Plain nullable `VARCHAR` columns, YAGNI-appropriate for advisory, non-validated data. |
 | `GET /spending/line-items` as a new endpoint vs. a nested breakdown on `GET /spending/summary` (ADR-010) | **adopted (new endpoint)** | The summary endpoint loads eagerly on every dashboard visit and must stay a cheap 11-row aggregate; a category's line items are only ever needed lazily, on click, for one category+month at a time — a dedicated endpoint keeps the eager path unchanged and fetches drill-down data only when actually requested. |
 | `GET /receipts/subcategory-labels` as a new endpoint vs. extending `/receipts/store-names` to return arbitrary "known values of field X" (ADR-010 refinement) | **adopted (new endpoint)** | Reuses store-names' *shape* (ranked, deduplicated, capped, unpaginated) but not its *route* — the response needed is a category-scoped hierarchy (`category → subcategory → subSubcategory[]`), not a flat string list, so a generic single endpoint would need a discriminated-union response purely to save a route, for two consumers (PWA combobox vs. the prompt-builder script) that will never share a call site. Same reasoning class as the `GET /spending/line-items`-vs-nested-field call directly above: different shape/consumer wins over route reuse. |
+| `GET /spending/subcategory-summary` as a new aggregate endpoint vs. 11× `/spending/line-items` or a nested field on `/spending/summary` (ADR-013) | **adopted (new endpoint)** | One small aggregate call for one chart; keeps `/spending/summary` (eager) unchanged and avoids shipping every line item of the month to draw bar segments. Fetched lazily only in "Szczegóły" mode. |
+| Server-side top-N + "Reszta" bucketing (ADR-013) | **rejected** | N is a presentation choice (bar width, legibility); the client needs the full list anyway for the accessible table fallback, and bucketing ≤ ~13 entries per bar is trivial. Server returns full sorted sums. |
+| Extract shared `LabelNormalization` helper from `SubcategoryLabelGrouper` | **adopted** | DRY with exactly two real consumers of the ADR-010 §5 normalize/casing rule — not speculative. Separate aggregator class keeps SRP (summing ≠ ranking). |
 
 **Bank-import additions (design-only, ADR-007):** Ports & Adapters for the PSD2 client, and
 several more pattern calls specific to that integration (a rejected three-way match state

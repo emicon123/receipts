@@ -13,10 +13,14 @@ import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import pl.receipts.controller.SpendingController;
+import pl.receipts.dto.spending.CategorySubcategoryBreakdown;
 import pl.receipts.dto.spending.SpendingLineItem;
 import pl.receipts.dto.spending.SpendingLineItemsResponse;
+import pl.receipts.dto.spending.SpendingSubcategorySummaryData;
+import pl.receipts.dto.spending.SpendingSubcategorySummaryResponse;
 import pl.receipts.dto.spending.SpendingSummaryData;
 import pl.receipts.dto.spending.SpendingSummaryResponse;
+import pl.receipts.dto.spending.SubcategoryAmount;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.service.SpendingService;
 
@@ -78,6 +82,46 @@ class SpendingControllerWebMvcTest {
     void lineItemsInvalidCategoryReturns400() throws Exception {
         mockMvc.perform(get("/api/spending/line-items")
                         .param("year", "2026").param("month", "4").param("category", "NOT_REAL"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void subcategorySummaryReturns200() throws Exception {
+        var breakdown = new CategorySubcategoryBreakdown(SpendCategory.JEDZENIE_PIERDOLOWATE,
+                new BigDecimal("86.40"), new BigDecimal("12.50"),
+                List.of(new SubcategoryAmount("Słodycze", new BigDecimal("41.20")),
+                        new SubcategoryAmount("Chipsy", new BigDecimal("32.70"))));
+        var data = new SpendingSubcategorySummaryData(2026, 9, new BigDecimal("86.40"), List.of(breakdown));
+        given(spendingService.subcategorySummary(2026, 9)).willReturn(new SpendingSubcategorySummaryResponse(data));
+
+        mockMvc.perform(get("/api/spending/subcategory-summary").param("year", "2026").param("month", "9"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.year").value(2026))
+                .andExpect(jsonPath("$.data.month").value(9))
+                .andExpect(jsonPath("$.data.totalAmount").value(86.40))
+                .andExpect(jsonPath("$.data.categories[0].category").value("JEDZENIE_PIERDOLOWATE"))
+                .andExpect(jsonPath("$.data.categories[0].unlabeledAmount").value(12.50))
+                .andExpect(jsonPath("$.data.categories[0].subcategories[0].subcategory").value("Słodycze"))
+                .andExpect(jsonPath("$.data.categories[0].subcategories[0].amount").value(41.20))
+                .andExpect(jsonPath("$.meta.requestId").exists());
+    }
+
+    @Test
+    void subcategorySummaryMonthOutOfRangeReturns400() throws Exception {
+        mockMvc.perform(get("/api/spending/subcategory-summary").param("year", "2026").param("month", "13"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors").isArray());
+    }
+
+    @Test
+    void subcategorySummaryMissingYearReturns400() throws Exception {
+        mockMvc.perform(get("/api/spending/subcategory-summary").param("month", "9"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void subcategorySummaryNonNumericMonthReturns400() throws Exception {
+        mockMvc.perform(get("/api/spending/subcategory-summary").param("year", "2026").param("month", "wrzesien"))
                 .andExpect(status().isBadRequest());
     }
 }
