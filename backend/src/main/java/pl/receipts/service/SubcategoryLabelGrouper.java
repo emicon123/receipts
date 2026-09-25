@@ -5,7 +5,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -28,7 +27,8 @@ import pl.receipts.repository.projection.SubcategoryLabelRow;
  * <ol>
  *   <li>Normalize for dedup via {@code lower(trim(...))}; display the exact-cased variant with
  *       the highest occurrence count within its group, tie-broken by that variant's own most
- *       recent {@code capturedAt}.</li>
+ *       recent {@code capturedAt}, then by the spelling itself (both via the shared
+ *       {@link LabelNormalization}).</li>
  *   <li>Rank groups by usage count descending, then most-recent {@code capturedAt} descending.</li>
  * </ol>
  *
@@ -61,7 +61,7 @@ public final class SubcategoryLabelGrouper {
 
     private static List<SubcategoryLabelGroup> groupSubcategories(List<SubcategoryLabelRow> categoryRows) {
         Map<String, List<SubcategoryLabelRow>> bySubKey = categoryRows.stream()
-                .collect(Collectors.groupingBy(r -> normalize(r.getSubcategory())));
+                .collect(Collectors.groupingBy(r -> LabelNormalization.normalize(r.getSubcategory())));
 
         return rankedGroupKeys(bySubKey).stream()
                 .map(subKey -> {
@@ -78,7 +78,7 @@ public final class SubcategoryLabelGrouper {
                 .toList();
 
         Map<String, List<SubcategoryLabelRow>> bySubSubKey = withSubSubcategory.stream()
-                .collect(Collectors.groupingBy(r -> normalize(r.getSubSubcategory())));
+                .collect(Collectors.groupingBy(r -> LabelNormalization.normalize(r.getSubSubcategory())));
 
         return rankedGroupKeys(bySubSubKey).stream()
                 .limit(MAX_SUB_SUBCATEGORIES_PER_GROUP)
@@ -97,24 +97,21 @@ public final class SubcategoryLabelGrouper {
                 .toList();
     }
 
-    /** Highest-occurrence exact-cased variant within a normalized group, tie-broken by recency. */
+    /**
+     * Display spelling for a normalized group — the shared ADR-010 §5 rule, see
+     * {@link LabelNormalization#pickDisplayCasing}.
+     */
     private static String pickDisplayCasing(List<SubcategoryLabelRow> rows,
                                              Function<SubcategoryLabelRow, String> extractor) {
-        Map<String, List<SubcategoryLabelRow>> byExactCasing = rows.stream()
-                .collect(Collectors.groupingBy(extractor));
-        return byExactCasing.entrySet().stream()
-                .max(Comparator
-                        .<Map.Entry<String, List<SubcategoryLabelRow>>>comparingInt(e -> e.getValue().size())
-                        .thenComparing(e -> maxCapturedAt(e.getValue())))
-                .map(Map.Entry::getKey)
-                .orElseThrow();
+        List<LabelNormalization.Variant> variants = rows.stream()
+                .collect(Collectors.groupingBy(extractor))
+                .entrySet().stream()
+                .map(e -> new LabelNormalization.Variant(e.getKey(), e.getValue().size(), maxCapturedAt(e.getValue())))
+                .toList();
+        return LabelNormalization.pickDisplayCasing(variants);
     }
 
     private static Instant maxCapturedAt(List<SubcategoryLabelRow> rows) {
         return rows.stream().map(SubcategoryLabelRow::getCapturedAt).max(Instant::compareTo).orElse(Instant.EPOCH);
-    }
-
-    private static String normalize(String value) {
-        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
     }
 }

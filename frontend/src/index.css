@@ -47,6 +47,17 @@
   --chart-grid: #e1e0d9;
   --chart-baseline: #c3c2b7;
   --chart-series-1: #2a78d6;
+  /*
+   * Ordinal shades of the series-1 hue for the "Szczegóły" stacked bars (ADR-013): rank 1 =
+   * largest subcategory in a bar = strongest contrast against the surface. Steps from the
+   * palette's blue sequential ramp (650/500/350/250); validated with the dataviz skill's
+   * validate_palette.js --ordinal (light end clears 2:1). "Reszta" uses --chart-muted, which
+   * clears the normal-vision and CVD floors against --chart-rank-4 in both modes.
+   */
+  --chart-rank-1: #104281;
+  --chart-rank-2: #256abf;
+  --chart-rank-3: #5598e7;
+  --chart-rank-4: #86b6ef;
   --status-good: #0ca30c;
   --status-warning: #fab219;
   --status-warning-foreground: #7a4a00;
@@ -87,6 +98,12 @@
     --chart-grid: #2c2c2a;
     --chart-baseline: #383835;
     --chart-series-1: #3987e5;
+    /* Dark mode flips the ramp anchor: the strongest step against the dark surface is the
+     * lightest (250/350/450/550; ordinal check passes, dark end 2.63:1). */
+    --chart-rank-1: #86b6ef;
+    --chart-rank-2: #5598e7;
+    --chart-rank-3: #2a78d6;
+    --chart-rank-4: #1c5cab;
     --status-good: #0ca30c;
     --status-warning: #fab219;
     --status-warning-foreground: #3a2400;

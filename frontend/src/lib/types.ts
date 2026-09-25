@@ -144,6 +144,34 @@ export interface SpendingTrendData {
   months: SpendingMonth[];
 }
 
+/** One normalized (`lower(trim())`) subcategory group within a category/month (ADR-013). */
+export interface SubcategoryAmount {
+  /** Most-used exact-cased variant in this month's slice — never null/blank. */
+  subcategory: string;
+  amount: number;
+}
+
+/**
+ * One category's subcategory breakdown (GET /spending/subcategory-summary, ADR-013).
+ * Invariant: `totalAmount == unlabeledAmount + Σ subcategories[].amount`. `subcategories` is the
+ * full list sorted by amount desc — top-N + "Reszta" bucketing is done client-side.
+ */
+export interface CategorySubcategoryBreakdown {
+  category: SpendCategory;
+  totalAmount: number;
+  /** Sum for line items with a NULL/blank subcategory; `0` when none. */
+  unlabeledAmount: number;
+  subcategories: SubcategoryAmount[];
+}
+
+export interface SpendingSubcategorySummaryData {
+  year: number;
+  month: number;
+  totalAmount: number;
+  /** All 11 categories, zero-filled, canonical GET /categories order. */
+  categories: CategorySubcategoryBreakdown[];
+}
+
 /**
  * One line item in the GET /spending/line-items drill-down (ADR-010) — the same LineItem shape
  * plus fields denormalized from the parent receipt, for display and for linking back to

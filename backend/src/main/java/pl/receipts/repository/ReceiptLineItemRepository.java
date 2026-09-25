@@ -14,6 +14,7 @@ import pl.receipts.entity.SpendCategory;
 import pl.receipts.repository.projection.CategoryTotalRow;
 import pl.receipts.repository.projection.MonthCategoryTotalRow;
 import pl.receipts.repository.projection.SubcategoryLabelRow;
+import pl.receipts.repository.projection.SubcategoryVariantTotalRow;
 
 public interface ReceiptLineItemRepository extends JpaRepository<ReceiptLineItem, Long> {
 
@@ -53,6 +54,25 @@ public interface ReceiptLineItemRepository extends JpaRepository<ReceiptLineItem
     List<MonthCategoryTotalRow> sumByMonthAndCategory(@Param("status") ReceiptStatus status,
                                                         @Param("from") Instant from,
                                                         @Param("to") Instant to);
+
+    /**
+     * Backs GET /spending/subcategory-summary (ADR-013) — same PROCESSED-only scope and month
+     * window as {@link #sumByCategory}, grouped one level deeper by the <em>exact</em>
+     * {@code subcategory} spelling (NULL groups as its own row). Normalization by
+     * {@code lower(trim())} and display-spelling choice happen in Java
+     * ({@link pl.receipts.service.SubcategorySpendingAggregator}), which is why each row carries
+     * its line-item count and latest {@code capturedAt}.
+     */
+    @Query("""
+            SELECT li.category AS category, li.subcategory AS subcategory, SUM(li.amount) AS total,
+                   COUNT(li) AS itemCount, MAX(r.capturedAt) AS lastCapturedAt
+            FROM ReceiptLineItem li JOIN li.receipt r
+            WHERE r.status = :status AND r.capturedAt >= :from AND r.capturedAt < :to
+            GROUP BY li.category, li.subcategory
+            """)
+    List<SubcategoryVariantTotalRow> sumBySubcategoryVariant(@Param("status") ReceiptStatus status,
+                                                             @Param("from") Instant from,
+                                                             @Param("to") Instant to);
 
     /**
      * Backs GET /spending/line-items (ADR-010 §3) — one category/month's line items, flat,
