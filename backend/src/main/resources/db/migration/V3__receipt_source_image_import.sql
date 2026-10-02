@@ -1,0 +1,21 @@
+-- V3__receipt_source_image_import.sql
+-- Adds the IMAGE_IMPORT value to receipt_source_enum (docs/adr/ADR-014-image-import-source.md):
+-- a receipt created from an image the user imported from the device — picked from the phone
+-- gallery / file picker, pasted from the clipboard, or dropped onto the capture screen — instead
+-- of captured live by the in-app camera. The content may be a screenshot of a digital receipt or
+-- order summary, OR a photo of a paper receipt taken earlier; the classifier decides by looking
+-- at the image. IMAGE_IMPORT is image-backed exactly like CAMERA and follows the same
+-- PENDING -> PROCESSING -> PROCESSED | FAILED lifecycle.
+--
+-- THIS FILE MUST CONTAIN ONLY THE ALTER TYPE. PostgreSQL refuses to *use* a freshly added enum
+-- value (e.g. in a CHECK constraint, an index predicate, or an INSERT) until the transaction
+-- that added it has committed (SQLSTATE 55P04 "unsafe use of new value"). Flyway runs each
+-- versioned migration in its own transaction (spring.flyway.group is left at its default of
+-- false — do NOT enable it, or V3 and V4 would share one transaction and V4 would fail), so the
+-- constraint that references 'IMAGE_IMPORT' lives in V4, which runs after this one has committed.
+--
+-- IF NOT EXISTS keeps a manual re-run harmless; Flyway itself never re-applies a recorded version.
+-- Existing rows are untouched — no backfill is possible or wanted (every pre-existing image
+-- receipt came through the camera input and stays CAMERA).
+
+ALTER TYPE receipt_source_enum ADD VALUE IF NOT EXISTS 'IMAGE_IMPORT';
