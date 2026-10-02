@@ -21,6 +21,7 @@ import { useDeleteReceipt } from "@/hooks/useDeleteReceipt";
 import { useReceipt } from "@/hooks/useReceipt";
 import { useReprocessReceipt } from "@/hooks/useReprocessReceipt";
 import { ApiError, resolveApiUrl } from "@/lib/api";
+import { fallbackReceiptTitle } from "@/lib/receiptLabels";
 import { formatCurrency } from "@/lib/utils";
 
 export function ReceiptDetailRoute() {
@@ -81,7 +82,7 @@ export function ReceiptDetailRoute() {
             <div className="overflow-hidden rounded-xl border border-border bg-card">
               <img
                 src={resolveApiUrl(receipt.imageUrl)}
-                alt="Paragon"
+                alt={fallbackReceiptTitle(receipt.source)}
                 className="w-full object-contain"
               />
             </div>
@@ -90,7 +91,7 @@ export function ReceiptDetailRoute() {
           <div className="flex items-start justify-between gap-2 rounded-xl border border-border bg-card p-3">
             <div>
               <p className="font-medium">
-                {receipt.storeName ?? (receipt.source === "MANUAL" ? "Wpis ręczny" : "Paragon")}
+                {receipt.storeName ?? fallbackReceiptTitle(receipt.source)}
               </p>
               <p className="text-sm text-muted-foreground">
                 {format(new Date(receipt.capturedAt), "d MMMM yyyy", { locale: pl })}

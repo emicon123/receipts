@@ -1,18 +1,48 @@
-import { Camera } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChangeEvent, DragEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { CaptureActions } from "@/components/capture/CaptureActions";
 import { CapturePreview } from "@/components/capture/CapturePreview";
 import { AppShell } from "@/components/layout/AppShell";
-import { Button } from "@/components/ui/button";
 import { useUploadReceipt } from "@/hooks/useUploadReceipt";
-import { ApiError } from "@/lib/api";
+import {
+  hasFinePointer,
+  imageFromClipboardData,
+  isClipboardReadSupported,
+  readClipboardImage,
+} from "@/lib/clipboardImage";
+import { describeImportError, normalizeImageFile } from "@/lib/normalizeImageFile";
+import type { ImageReceiptSource } from "@/lib/types";
+import { describeUploadError } from "@/lib/uploadError";
 
+/** A normalised image waiting for the user's Powtórz / Zatwierdź decision, plus where it came from. */
+interface Draft {
+  file: File;
+  source: ImageReceiptSource;
+  previewUrl: string;
+}
+
+/**
+ * The only place an image enters the app. Camera, gallery picker, clipboard button, `paste` event
+ * and drop all converge on one normalisation step, one preview/confirm step and one upload
+ * mutation; only the upload endpoint differs by the draft's source (CAMERA vs IMAGE_IMPORT) —
+ * docs/architecture/04-classification-flow.md § Capture Entry Points.
+ */
 export function CaptureRoute() {
-  const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const upload = useUploadReceipt();
+  const { reset: resetUpload } = upload;
+  // Environment capabilities don't change during a visit — evaluate once.
+  const [canPasteFromClipboard] = useState(isClipboardReadSupported);
+  const [showKeyboardPasteHint] = useState(hasFinePointer);
+
+  const hasDraft = draft !== null;
+  const previewUrl = draft?.previewUrl;
 
   // Revoke the object URL whenever we drop it, so preview blobs don't leak.
   useEffect(() => {
@@ -21,83 +51,139 @@ export function CaptureRoute() {
     };
   }, [previewUrl]);
 
-  function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+  const startDraft = useCallback(
+    async (image: File | Promise<File>, source: ImageReceiptSource) => {
+      setImportError(null);
+      resetUpload();
+      setIsPreparing(true);
+      try {
+        const file = await normalizeImageFile(await image);
+        setDraft({ file, source, previewUrl: URL.createObjectURL(file) });
+      } catch (error) {
+        setImportError(describeImportError(error));
+      } finally {
+        setIsPreparing(false);
+      }
+    },
+    [resetUpload],
+  );
+
+  // Ctrl/Cmd+V (and long-press -> Paste on mobile, where it fires) — the only clipboard path that
+  // works without the async Clipboard API, e.g. over plain HTTP. Only while no draft is showing.
+  useEffect(() => {
+    if (hasDraft || isPreparing) return;
+    function handlePaste(event: ClipboardEvent) {
+      const image = imageFromClipboardData(event.clipboardData);
+      if (!image) return; // text-only paste: leave it alone
+      event.preventDefault();
+      void startDraft(image, "IMAGE_IMPORT");
+    }
+    document.addEventListener("paste", handlePaste);
+    return () => document.removeEventListener("paste", handlePaste);
+  }, [hasDraft, isPreparing, startDraft]);
+
+  function pickFromInput(event: ChangeEvent<HTMLInputElement>, source: ImageReceiptSource) {
     const selected = event.target.files?.[0];
-    if (!selected) return;
-    setFile(selected);
-    setPreviewUrl(URL.createObjectURL(selected));
-    upload.reset();
     // Allow re-selecting the exact same file next time (retake -> same photo).
     event.target.value = "";
+    if (selected) void startDraft(selected, source);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLDivElement>) {
+    // Without this the browser would navigate away to the dropped image file.
+    if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes("Files")) return;
+    event.preventDefault();
+    const dropped = event.dataTransfer.files[0];
+    if (dropped && !hasDraft && !isPreparing) void startDraft(dropped, "IMAGE_IMPORT");
   }
 
   function handleRetake() {
-    if (previewUrl) URL.revokeObjectURL(previewUrl);
-    setFile(null);
-    setPreviewUrl(null);
+    setDraft(null);
+    setImportError(null);
     upload.reset();
   }
 
   function handleAccept() {
-    if (!file) return;
+    if (!draft) return;
     upload.mutate(
-      { image: file, capturedAt: new Date() },
+      {
+        image: draft.file,
+        source: draft.source,
+        // An import omits it (server defaults to now; the classifier reads the real date).
+        capturedAt: draft.source === "CAMERA" ? new Date() : undefined,
+      },
       {
         onSuccess: () => {
-          if (previewUrl) URL.revokeObjectURL(previewUrl);
-          setFile(null);
-          setPreviewUrl(null);
+          setDraft(null);
           navigate("/receipts");
         },
       },
     );
   }
 
+  const errorMessage = importError ?? (upload.isError ? describeUploadError(upload.error) : null);
+
   return (
-    <AppShell title="Zrób zdjęcie paragonu">
-      <div className="flex min-h-full flex-col gap-4">
-        {upload.isError && (
+    <AppShell title="Dodaj paragon">
+      <div
+        className="flex min-h-full flex-col gap-4"
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {errorMessage && (
           <p role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {upload.error instanceof ApiError
-              ? upload.error.message
-              : "Wysyłanie nie powiodło się. Spróbuj ponownie."}
+            {errorMessage}
           </p>
         )}
 
-        {previewUrl ? (
+        {isPreparing && (
+          <p role="status" className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+            Przygotowuję obraz…
+          </p>
+        )}
+
+        {draft ? (
           <CapturePreview
-            previewUrl={previewUrl}
+            previewUrl={draft.previewUrl}
             isUploading={upload.isPending}
             onRetake={handleRetake}
             onAccept={handleAccept}
           />
         ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-6 text-center">
-            <div>
-              <p className="text-lg font-semibold">Zrób zdjęcie paragonu</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Dotknij przycisku, zrób wyraźne zdjęcie całego paragonu i potwierdź, że wygląda
-                dobrze, zanim zostanie wysłane.
-              </p>
-            </div>
-            <Button
-              type="button"
-              size="icon"
-              className="size-28 rounded-full [&_svg]:size-11"
-              onClick={() => inputRef.current?.click()}
-              aria-label="Otwórz aparat, aby zrobić zdjęcie paragonu"
-            >
-              <Camera />
-            </Button>
-          </div>
+          <CaptureActions
+            disabled={isPreparing}
+            canPasteFromClipboard={canPasteFromClipboard}
+            showKeyboardPasteHint={showKeyboardPasteHint}
+            onOpenCamera={() => cameraInputRef.current?.click()}
+            onOpenGallery={() => galleryInputRef.current?.click()}
+            onPasteFromClipboard={() => void startDraft(readClipboardImage(), "IMAGE_IMPORT")}
+          />
         )}
 
+        {/* Camera: opens the camera directly. */}
         <input
-          ref={inputRef}
+          ref={cameraInputRef}
           type="file"
           accept="image/*"
           capture="environment"
-          onChange={handleFileChange}
+          onChange={(event) => pickFromInput(event, "CAMERA")}
+          className="sr-only"
+          aria-hidden="true"
+          tabIndex={-1}
+        />
+        {/* Gallery: deliberately NO `capture` (that would open the camera instead of the photo
+            library / file chooser) and NO `multiple` (one image = one receipt entry). `image/*`
+            rather than a png/jpeg/webp list so Android shows HEIC/HEIF files too; whatever the
+            backend can't take is converted by normalizeImageFile. */}
+        <input
+          ref={galleryInputRef}
+          type="file"
+          accept="image/*"
+          onChange={(event) => pickFromInput(event, "IMAGE_IMPORT")}
           className="sr-only"
           aria-hidden="true"
           tabIndex={-1}

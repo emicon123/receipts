@@ -6,8 +6,14 @@
 export const RECEIPT_STATUSES = ["PENDING", "PROCESSING", "PROCESSED", "FAILED"] as const;
 export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 
-export const RECEIPT_SOURCES = ["CAMERA", "MANUAL"] as const;
+// `BANK_IMPORT` is in the OpenAPI enum but design-only (ADR-007, no endpoint returns it) — it is
+// deliberately left out of this union until it is implemented.
+export const RECEIPT_SOURCES = ["CAMERA", "MANUAL", "IMAGE_IMPORT"] as const;
 export type ReceiptSource = (typeof RECEIPT_SOURCES)[number];
+
+/** The two image-backed sources a client can create: a live camera capture (`POST /receipts`)
+ * or an imported gallery/clipboard/dropped image (`POST /receipts/image-import`, ADR-014). */
+export type ImageReceiptSource = Extract<ReceiptSource, "CAMERA" | "IMAGE_IMPORT">;
 
 /**
  * The fixed 11-value category enum (see openapi.yaml SpendCategory / CLAUDE.md § Categories).
