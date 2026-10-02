@@ -16,11 +16,20 @@ Each run:
    invocation spent on an empty queue.
 2. Downloads every pending receipt's image to a temp dir, appends an `id → path` manifest to
    `prompt.md`, and runs **one** `claude -p "<prompt>" --output-format json --allowedTools "Read"`
-   call for the whole batch.
+   call for the whole batch. A pending entry is `{id, source}` (`CAMERA`, or `IMAGE_IMPORT` for an
+   image imported from the phone gallery/clipboard — ADR-014; a missing `source` is treated as
+   `CAMERA`). Each image is saved under its **real** type, taken from the `Content-Type` of
+   `GET /receipts/{id}/image` (parameters such as `;charset=…` stripped, case-insensitive):
+   `image/jpeg` → `receipt-<id>.jpg`, `image/png` → `.png`, `image/webp` → `.webp` — the `Read`
+   tool decodes by extension, so a PNG screenshot saved as `.jpg` would not be read correctly.
+   Any other `Content-Type`, or a failed download, aborts the run before `claude` is called
+   (logged as an `ERROR:`; nothing is submitted, so every receipt stays `PENDING`). The manifest
+   line per image is exactly `- id=<id> path=<absolute temp path> source=<CAMERA|IMAGE_IMPORT>`,
+   and each download logs `Downloaded receipt <id> (<source>, <ext>).`
 3. On any failure (non-zero exit, or `is_error: true` in the JSON wrapper) — logs it and exits
-   `0` **without** submitting anything. Every receipt in that run simply stays `PENDING`; the
-   next scheduled slot picks the whole batch back up automatically. This is deliberately more
-   forgiving than investing-app's news job (no retry, 24h gap) — see the crontab below for why.
+   `0` **without** submitting anything. Every receipt in that run simply stays `PENDING` and is
+   picked up automatically by the next day's 06:00 run — the same accepted, low-stakes gap
+   investing-app's news job tolerates (see the crontab below).
 4. On success, POSTs the parsed `{items, failures}` object straight to
    `POST {API_BASE}/receipts/classification-batch` and logs a one-line summary.
 
@@ -69,8 +78,32 @@ tail -f /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.lo
 
 With no pending receipts, expect a single "No pending receipts — nothing to do." log line and
 exit `0` with no `claude` invocation. With at least one `PENDING` receipt (upload one through the
-PWA first), expect the image(s) to download, one `claude -p` call, and either a submitted-batch
-summary line or a "leaving all N receipt(s) PENDING" line on failure.
+PWA first), expect one `Downloaded receipt <id> (<source>, <ext>).` line per image, one
+`claude -p` call, and either a submitted-batch summary line or a "leaving all N receipt(s)
+PENDING" line on failure.
+
+To check the image-import path (ADR-014) end to end — an imported PNG must be downloaded as
+`.png` and tagged `source=IMAGE_IMPORT` — upload a PNG the way the PWA's gallery/paste action
+does (the server reads the part's content type, so set it explicitly), then run the script:
+
+```bash
+curl -sf -F 'image=@/path/to/screenshot.png;type=image/png' \
+  http://localhost:8080/api/receipts/image-import          # 201, source IMAGE_IMPORT, status PENDING
+curl -s -o /dev/null -D - http://localhost:8080/api/receipts/<id>/image | grep -i '^content-type'
+                                                           # expect: content-type: image/png
+
+/home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
+grep 'Downloaded receipt' /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.log | tail
+                                                           # expect: Downloaded receipt <id> (IMAGE_IMPORT, png).
+```
+
+The temp dir is removed when the script exits, so to see the actual file name and manifest line
+(`path=…/receipt-<id>.png source=IMAGE_IMPORT`) run it once under `bash -x` and filter the trace
+(`… 2>&1 | grep -E '^\+ img='` shows the `.png` path). If the `Content-Type` is anything other
+than JPEG/PNG/WebP, the run stops with `ERROR: unsupported image Content-Type …` and nothing is
+submitted. Note that a run with a pending receipt makes a real `claude` call and spends part of
+the Claude usage limit; to exercise the script without that, point `CLAUDE_BIN` (overridable,
+like `API_BASE`) at a stub that prints a `{"is_error":false,"result":"{…}"}` envelope.
 
 ## Installing the crontab entries
 
@@ -81,35 +114,32 @@ summary line or a "leaving all N receipt(s) PENDING" line on failure.
 crontab -e
 ```
 
-Add these five lines. `0 6 * * *` is the primary run (per the user's explicit request); the
-other four are same-day safety-net slots — each is a near-free no-op via the empty-queue check
-unless the primary run actually failed (see `docs/architecture/04-classification-flow.md`'s
-retry sequence diagram):
+Add this single line — one run per day at 06:00, exactly like investing-app's nightly news job
+(its entry is `0 23 * * *`), with no same-day retry slots (CLAUDE.md § Daily classification job;
+the user asked for the single 06:00 run, so earlier iterations' extra 10:00/14:00/18:00/22:00
+safety-net slots were dropped). If a run fails, every receipt in it simply stays `PENDING` and the
+next day's 06:00 run picks it up:
 
 ```cron
-0 6 * * *  /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
-0 10 * * * /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
-0 14 * * * /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
-0 18 * * * /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
-0 22 * * * /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
+0 6 * * * /home/wojtekrpi/Claude-Code/receipts/infra/classify/classify-receipts.sh
 ```
 
-No `>> ... 2>&1` redirect on these lines, unlike investing-app's single nightly entry — this
-script already logs every step internally via its own `log()`/`fail()` helpers to
+No `>> ... 2>&1` redirect on this line, unlike investing-app's nightly entry — this script
+already logs every step internally via its own `log()`/`fail()` helpers to
 `classify-receipts.log`; adding a crontab-level redirect on top would just duplicate every line
-into the same file. (investing-app's one entry does redirect because that's its *only* place
+into the same file. (investing-app's entry does redirect because that's its *only* place
 anything gets logged for a shell-level failure before its own logging kicks in; either
-convention is fine, just don't do both — see `.claude/agents/devops.md` § the daily job.)
+convention is fine, just don't do both.)
 
-These five lines run in the cron daemon's system-configured timezone (same caveat as
-investing-app's news job) — confirm with `date` on the host that it already reports the intended
-local time before relying on "06:00" meaning what you expect.
+This line runs in the cron daemon's system-configured timezone (same caveat as investing-app's
+news job) — confirm with `date` on the host that it already reports the intended local time
+before relying on "06:00" meaning what you expect.
 
 ## Known limitations / gotchas
 
-- If the Pi is rebooted or powered off across all five scheduled slots on a given day, that
-  day's classification is simply skipped — no backfill. The next day's 06:00 run picks up
-  everything still `PENDING`, including anything from the missed day.
+- If the Pi is rebooted or powered off at 06:00 on a given day, that day's classification is
+  simply skipped — no backfill. The next day's 06:00 run picks up everything still `PENDING`,
+  including anything from the missed day.
 - `claude -p` CLI flags or `--allowedTools` availability can change between Claude Code
   releases; this script is isolated from the backend so fixing it never requires a backend
   redeploy.
