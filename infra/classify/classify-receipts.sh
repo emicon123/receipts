@@ -94,13 +94,39 @@ prompt_with_labels="$(MANIFEST_TEXT="${known_labels_manifest}" awk -v token='{{K
   { print }
 ' "${PROMPT_FILE}")"
 
+# ADR-014: a pending receipt is an image from the camera (CAMERA) or one imported from the gallery /
+# clipboard (IMAGE_IMPORT — often a PNG screenshot, or a HEIC-converted JPEG). The image's real type
+# is only known once the response arrives, so each image is downloaded to a neutral name first and
+# then renamed to receipt-<id>.<ext> from the response's Content-Type — the Read tool decodes by file
+# extension, so a PNG saved as `.jpg` would not be read correctly. Any download failure or an
+# unsupported Content-Type is handled exactly like the pre-existing "could not download" case: fail()
+# before the claude call, so nothing is submitted and every receipt in the run stays PENDING.
+# `source` comes from GET /receipts/pending's `{id, source}` entries (absent on an older backend
+# -> CAMERA, which is also how prompt.md treats a path= line with no source=).
 manifest=""
-while IFS= read -r id; do
-  img="${TMP_DIR}/receipt-${id}.jpg"
-  curl -sf "${API_BASE}/receipts/${id}/image" -o "${img}" || fail "could not download image for receipt ${id}"
+while IFS=$'\t' read -r id receipt_source; do
+  download="${TMP_DIR}/receipt-${id}.download"
+  content_type="$(curl -sf -o "${download}" -w '%{content_type}' "${API_BASE}/receipts/${id}/image")" \
+    || fail "could not download image for receipt ${id}"
+
+  # Normalize the Content-Type before matching: drop any ";charset=..." style parameter,
+  # lower-case it, and strip stray whitespace.
+  mime="${content_type%%;*}"
+  mime="${mime,,}"
+  mime="${mime//[[:space:]]/}"
+  case "${mime}" in
+    image/jpeg) ext="jpg" ;;
+    image/png)  ext="png" ;;
+    image/webp) ext="webp" ;;
+    *) fail "unsupported image Content-Type '${content_type}' for receipt ${id} (expected image/jpeg, image/png or image/webp)" ;;
+  esac
+
+  img="${TMP_DIR}/receipt-${id}.${ext}"
+  mv "${download}" "${img}"
+  log "Downloaded receipt ${id} (${receipt_source}, ${ext})."
   manifest="${manifest}
-- id=${id} path=${img}"
-done < <(echo "${pending_json}" | jq -r '.data[].id')
+- id=${id} path=${img} source=${receipt_source}"
+done < <(echo "${pending_json}" | jq -r '.data[] | [.id, ((.source // "") | if . == "" then "CAMERA" else . end)] | @tsv')
 
 full_prompt="${prompt_with_labels}
 ${manifest}"
