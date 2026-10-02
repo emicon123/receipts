@@ -100,7 +100,8 @@ export async function getReceipt(id: number): Promise<ReceiptDetail> {
   return data.data;
 }
 
-export async function uploadReceipt(
+async function postReceiptImage(
+  path: string,
   image: File,
   capturedAt?: Date,
 ): Promise<ReceiptSummary> {
@@ -109,10 +110,24 @@ export async function uploadReceipt(
   if (capturedAt) {
     form.append("capturedAt", capturedAt.toISOString());
   }
-  const { data } = await apiClient.post<Envelope<ReceiptSummary>>("/receipts", form, {
+  const { data } = await apiClient.post<Envelope<ReceiptSummary>>(path, form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
   return data.data;
+}
+
+/** `POST /receipts` — a photo captured live by the camera input (`source = CAMERA`). */
+export function uploadReceipt(image: File, capturedAt?: Date): Promise<ReceiptSummary> {
+  return postReceiptImage("/receipts", image, capturedAt);
+}
+
+/**
+ * `POST /receipts/image-import` — an existing image the user imported from the gallery, clipboard
+ * or a drop (`source = IMAGE_IMPORT`, ADR-014). Sends no `capturedAt`: the server defaults it to
+ * the upload time and the classifier later overrides the date with the one shown on the image.
+ */
+export function importReceiptImage(image: File): Promise<ReceiptSummary> {
+  return postReceiptImage("/receipts/image-import", image);
 }
 
 export async function createManualReceipt(

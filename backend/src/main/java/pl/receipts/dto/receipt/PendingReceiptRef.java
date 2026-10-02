@@ -1,4 +1,6 @@
 package pl.receipts.dto.receipt;
 
-public record PendingReceiptRef(Long id) {
+import pl.receipts.entity.ReceiptSource;
+
+public record PendingReceiptRef(Long id, ReceiptSource source) {
 }

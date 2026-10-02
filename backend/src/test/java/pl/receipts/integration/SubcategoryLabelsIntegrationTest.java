@@ -13,6 +13,7 @@ import pl.receipts.dto.classification.ClassificationBatchRequest;
 import pl.receipts.dto.classification.ClassificationLineItemInput;
 import pl.receipts.dto.receipt.CategorySubcategoryLabels;
 import pl.receipts.dto.receipt.SubcategoryLabelGroup;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.service.ClassificationBatchService;
 import pl.receipts.service.ReceiptService;
@@ -82,7 +83,7 @@ class SubcategoryLabelsIntegrationTest extends AbstractIntegrationTest {
 
     private Long upload() throws Exception {
         var file = new MockMultipartFile("image", "r.jpg", "image/jpeg", "bytes".getBytes());
-        var summary = receiptService.uploadCameraReceipt(file, Instant.now());
+        var summary = receiptService.uploadImageReceipt(file, Instant.now(), ReceiptSource.CAMERA);
         return summary.id();
     }
 }
