@@ -15,6 +15,7 @@ import pl.receipts.dto.classification.ClassificationBatchRequest;
 import pl.receipts.dto.classification.ClassificationLineItemInput;
 import pl.receipts.dto.receipt.ReceiptDetail;
 import pl.receipts.dto.receipt.ReceiptSummary;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.exception.MalformedBatchRequestException;
 import pl.receipts.service.ClassificationBatchService;
@@ -173,7 +174,7 @@ class ClassificationBatchIntegrationTest extends AbstractIntegrationTest {
 
     private Long upload() throws Exception {
         var file = new MockMultipartFile("image", "r.jpg", "image/jpeg", "bytes".getBytes());
-        ReceiptSummary summary = receiptService.uploadCameraReceipt(file, Instant.now());
+        ReceiptSummary summary = receiptService.uploadImageReceipt(file, Instant.now(), ReceiptSource.CAMERA);
         return summary.id();
     }
 }

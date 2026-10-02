@@ -15,6 +15,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import pl.receipts.dto.receipt.LineItemCorrectionRequest;
 import pl.receipts.entity.Receipt;
 import pl.receipts.entity.ReceiptLineItem;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.exception.InvalidLineItemException;
 import pl.receipts.mapper.LineItemMapper;
@@ -47,7 +48,7 @@ class LineItemCorrectionServiceTest {
                 new BigDecimal("5.00"), null);
         when(lineItemRepository.findByIdAndReceiptId(10L, 1L)).thenReturn(Optional.of(lineItem));
         when(lineItemRepository.sumAmountByReceiptId(1L)).thenReturn(new BigDecimal("7.50"));
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", java.time.Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", java.time.Instant.now());
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
 
         var request = new LineItemCorrectionRequest(null, "JEDZENIE_PIERDOLOWATE", null, null);
