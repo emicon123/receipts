@@ -23,23 +23,15 @@ files — everything lives in `docs/openapi.yaml#/components/schemas`).
 
 | Method | Path | Caller | Notes |
 |---|---|---|---|
-| POST | `/api/receipts` | PWA | Multipart image upload → `PENDING`/`CAMERA` receipt. Returns immediately, no classification. |
+| POST | `/api/receipts` | PWA | Multipart image upload of an image captured live by the camera input → `PENDING`/`CAMERA` receipt. Returns immediately, no classification. Contract unchanged by the image-import feature. |
+| POST | `/api/receipts/image-import` | PWA | Multipart image upload of an **imported** image (phone gallery / file picker, clipboard paste, drop) → `PENDING`/`IMAGE_IMPORT` receipt. Same shape, limits, allow-list and `201`/`400`/`422` as `POST /api/receipts`; only the stored `source` differs. Returns immediately, no classification. See § Image upload endpoints below. |
 | POST | `/api/receipts/manual` | PWA | No image, direct line-item entry (e.g. `RACHUNKI` bills) → `PROCESSED`/`MANUAL` receipt straight away. Strict `422` validation (this is direct human input). |
 | GET | `/api/receipts` | PWA | Paginated list, filterable by `year`, `month`, `status`, `source`. Default sort `capturedAt` desc. |
-| GET | `/api/receipts/pending` | **classify-receipts.sh** | List of everything `PENDING`. Pure read — never mutates status (see `03-receipt-lifecycle.md`). Unpaginated by design. Lean `{id}` for `CAMERA`; inline transaction fields (no image to fetch) for `BANK_IMPORT` — design-only, ADR-007, see `06-bank-integration.md`. |
+| GET | `/api/receipts/pending` | **classify-receipts.sh** | List of everything `PENDING`. Pure read — never mutates status (see `03-receipt-lifecycle.md`). Unpaginated by design. Lean `{id, source}` for the image-backed sources `CAMERA`/`IMAGE_IMPORT` (`source` is always present — the script tags the image's manifest line with it); inline transaction fields (no image to fetch) for `BANK_IMPORT` — design-only, ADR-007, see `06-bank-integration.md`. |
 | GET | `/api/receipts/store-names` | PWA (manual-entry combobox) | Ranked, deduplicated `storeName` suggestions across all receipts/sources/statuses. Unpaginated, capped at 20. See `02-domain-model-and-schema.md` § Store-Name Suggestions and ADR-009 for the ranking/dedup rules. |
 | GET | `/api/receipts/subcategory-labels` | **classify-receipts.sh** | Known `subcategory`/`subSubcategory` labels, grouped by category, ranked/deduped the same way as `store-names` but capped at 30 `subSubcategories` per subcategory rather than a flat top-20. Spliced into `prompt.md`'s `{{KNOWN_LABELS_MANIFEST}}` placeholder so the classifier reuses a label across daily runs instead of drifting into near-duplicates. See `02-domain-model-and-schema.md` § Known Subcategory/Sub-Subcategory Labels and ADR-010 § Cross-batch label consistency. |
 | GET | `/api/receipts/{id}` | PWA | Full detail incl. `imageUrl` + line items. |
-| GET | `/api/receipts/{id}/image` | PWA, **classify-receipts.sh** | Raw image bytes. 404 for a `MANUAL`/`BANK_IMPORT` receipt (no image) or unknown id. |
-
-`imageUrl` (on `ReceiptSummary`/`ReceiptDetail`) is a server-root-relative path such as
-`/api/receipts/42/image` — the backend has no notion of the app's `/paragony/` deployment
-prefix and must not bake one in (see CLAUDE.md's "Deployment" section: prefix handling is
-frontend-owned, centralized through `import.meta.env.BASE_URL`, same as `vite.config.ts`'s
-`base` and the router `basename`). Any place the PWA renders `imageUrl` as an asset `src`
-resolves it through that same mechanism rather than using the backend's path verbatim —
-`apiClient`'s own `baseURL` already does this for JSON calls; `resolveApiUrl()` in
-`frontend/src/lib/api.ts` extends the same resolution to non-axios asset URLs like this one.
+| GET | `/api/receipts/{id}/image` | PWA, **classify-receipts.sh** | Raw image bytes. The response `Content-Type` (`image/jpeg`/`image/png`/`image/webp`) is load-bearing: the script names its temp file by it. 404 for a `MANUAL`/`BANK_IMPORT` receipt (no image) or unknown id. |
 | POST | `/api/receipts/classification-batch` | **classify-receipts.sh** | Body is Claude's raw `{items, failures}` output (design-only: gains `uncertainCategory` — ADR-007), forwarded unchanged. Idempotent per receipt; replaces only uncorrected line items; tolerant of an unknown `receiptId` or an out-of-enum `category` per entry (routed to `FAILED`/`skipped`, never a whole-request 400) — see below. |
 | PUT | `/api/receipts/{id}/line-items/{itemId}` | PWA | User correction. Sets `corrected = true`; never touched by a later classification-batch replace. |
 | PUT | `/api/receipts/{id}/category` | PWA | **Design-only, ADR-007.** Resolves a `NEEDS_CATEGORY_REVIEW` (`BANK_IMPORT`-only) receipt by hand — creates its single line item, `corrected = true` immediately. Not reachable via `reprocess`. |
@@ -55,6 +47,44 @@ resolves it through that same mechanism rather than using the backend's path ver
 | GET | `/api/bank/connection` | PWA (Settings) | **Design-only, ADR-007.** Connection status; never returns raw tokens. |
 | DELETE | `/api/bank/connection` | PWA (Settings) | **Design-only, ADR-007.** Disconnect / clear stored tokens. |
 | POST | `/api/bank/sync` | **bank-sync cron trigger** | **Design-only, ADR-007.** Daily sync-job entry point, mirrors `classification-batch`'s shape — always `200`, degrades to a no-op on expired consent. See `06-bank-integration.md`. |
+
+`imageUrl` (on `ReceiptSummary`/`ReceiptDetail`) is a server-root-relative path such as
+`/api/receipts/42/image` — the backend has no notion of the app's `/paragony/` deployment
+prefix and must not bake one in (see CLAUDE.md's "Deployment" section: prefix handling is
+frontend-owned, centralized through `import.meta.env.BASE_URL`, same as `vite.config.ts`'s
+`base` and the router `basename`). Any place the PWA renders `imageUrl` as an asset `src`
+resolves it through that same mechanism rather than using the backend's path verbatim —
+`apiClient`'s own `baseURL` already does this for JSON calls; `resolveApiUrl()` in
+`frontend/src/lib/api.ts` extends the same resolution to non-axios asset URLs like this one.
+
+## Image upload endpoints (`CAMERA` vs `IMAGE_IMPORT`)
+
+`POST /receipts` and `POST /receipts/image-import` take the identical multipart body (an `image`
+part, optional `capturedAt`), enforce the identical limits (20 MB, JPEG/PNG/WebP by the part's
+content type, anything else `422`), and return the identical `201 { data: ReceiptSummary }` with
+`status = PENDING`. The only difference is the stored, immutable `source`. Contract points that
+matter to Backend/Frontend/DevOps:
+
+- **`source` names the channel, not the content.** `CAMERA` = captured live by the camera input;
+  `IMAGE_IMPORT` = an existing image the user imported — a screenshot of a digital receipt *or* a
+  photo of a paper one. The classifier decides from what the image shows (see
+  `infra/classify/prompt.md`), so nothing downstream may assume an `IMAGE_IMPORT` image is a
+  screenshot.
+- **Two paths, not a `source` field**, so the camera contract is unchanged and no client-supplied
+  enum has to be validated (ADR-014). The controller passes a fixed `ReceiptSource` to one shared
+  service method.
+- **`capturedAt`:** the camera path keeps sending it; the import path omits it (server default:
+  now), and `classification-batch` later replaces the date with the one on the image if legible.
+- **Formats:** the server does not convert anything. The PWA normalises any other image type (HEIC
+  from an Android gallery, GIF, …) to JPEG client-side before upload; a `422` from either endpoint is
+  a last-resort guard that the PWA maps to a Polish format message. See `04-classification-flow.md`
+  § Capture Entry Points.
+- **`GET /receipts/pending`** returns `{id, source}` for every entry — `source` was already required
+  by the spec's `PendingReceiptRef` but the backend returned `id` only, so Backend must now populate
+  it. A script talking to an older backend that omits it treats the entry as `CAMERA`.
+- **`GET /receipts?source=`** is declared in the spec for `CAMERA`/`IMAGE_IMPORT`/`MANUAL`
+  (+ design-only `BANK_IMPORT`) but is not implemented by the backend yet and is not needed by this
+  feature.
 
 ## `classification-batch` Tolerance Rules (worth calling out explicitly)
 

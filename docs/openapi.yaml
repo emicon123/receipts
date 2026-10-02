@@ -81,12 +81,13 @@ paths:
       tags: [receipts]
       summary: Upload a receipt photo (camera)
       description: |
-        Multipart image upload of a **photographed paper receipt**. Creates a `PENDING` /
+        Multipart image upload of a **photo captured live by the in-app camera**. Creates a `PENDING` /
         `CAMERA` receipt and returns immediately — **no classification happens on this
         request**; the daily `classify-receipts.sh` cron job picks it up later via
         `GET /receipts/pending`. This path always yields `source = CAMERA` and has no
-        `source` field — to upload a pasted/picked screenshot of a digital receipt, use
-        `POST /receipts/screenshot` instead (ADR-014).
+        `source` field — to upload an image the user *imported* (picked from the gallery or
+        file picker, pasted, dropped) rather than captured live with the in-app camera, use
+        `POST /receipts/image-import` instead (ADR-014).
       operationId: uploadReceipt
       requestBody:
         required: true
@@ -138,7 +139,7 @@ paths:
         - name: source
           in: query
           description: |
-            `CAMERA`, `SCREENSHOT` and `MANUAL` are live values. `BANK_IMPORT` is a
+            `CAMERA`, `IMAGE_IMPORT` and `MANUAL` are live values. `BANK_IMPORT` is a
             design-only filter value: not returned by any endpoint yet (ADR-007) — reserved
             so the frontend's filter UI is forward-compatible.
           schema: { $ref: "#/components/schemas/ReceiptSource" }
@@ -158,25 +159,34 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
-  /receipts/screenshot:
+  /receipts/image-import:
     post:
       tags: [receipts]
-      summary: Upload a screenshot of a digital receipt
+      summary: Import an existing image (gallery, file picker or clipboard)
       description: |
-        Multipart image upload of a **screenshot** — a pasted clipboard image or an image
-        picked from the gallery/file picker (e.g. a store-app e-receipt, an online-order
-        summary, a bank-app/BLIK confirmation). Identical to `POST /receipts` in every
-        respect except the stored `source`: creates a `PENDING` / `SCREENSHOT` receipt and
-        returns immediately — **no classification happens on this request**; the daily
-        `classify-receipts.sh` cron job picks it up via `GET /receipts/pending` exactly like
-        a camera photo and tells the classifier it is reading a screenshot (ADR-014).
+        Multipart image upload of an image the user **imported** instead of capturing live with
+        the in-app camera: a photo or screenshot picked from the phone gallery / file picker
+        (the primary path — the PWA is used almost exclusively on a phone), a pasted clipboard
+        image, or a file dropped onto the capture screen on desktop. The content can be a
+        screenshot of a digital receipt (store-app e-receipt, online-order summary, bank/BLIK
+        confirmation) **or** a photo of a paper receipt taken earlier — the server does not
+        care, and the classifier decides what it is by looking at the image (ADR-014).
+
+        Identical to `POST /receipts` in every respect except the stored `source`: creates a
+        `PENDING` / `IMAGE_IMPORT` receipt and returns immediately — **no classification
+        happens on this request**; the daily `classify-receipts.sh` cron job picks it up via
+        `GET /receipts/pending` exactly like a camera photo and tags it `source=IMAGE_IMPORT`
+        for the classifier.
 
         Same 20 MB multipart limit and same JPEG/PNG/WebP allow-list as `POST /receipts`
-        (checked against the part's `Content-Type`); any other type is rejected with `422`
-        (`UnsupportedImageTypeException`). A separate path rather than a `source` field on
-        `POST /receipts` keeps the camera contract untouched and means the client can never
-        submit a `source` this endpoint doesn't own (ADR-014).
-      operationId: uploadScreenshotReceipt
+        (checked against the part's `Content-Type`); any other type — notably HEIC/HEIF, which
+        the server does **not** convert — is rejected with `422` (`UnsupportedImageTypeException`).
+        The PWA therefore normalises any other image type to JPEG client-side before calling
+        this endpoint (see `docs/architecture/04-classification-flow.md` § Capture Entry
+        Points), so a `422` here is a last-resort guard, not an expected path. A separate path
+        rather than a `source` field on `POST /receipts` keeps the camera contract untouched
+        and means the client can never submit a `source` this endpoint doesn't own (ADR-014).
+      operationId: importReceiptImage
       requestBody:
         required: true
         content:
@@ -189,21 +199,22 @@ paths:
                   type: string
                   format: binary
                   description: |
-                    JPEG/PNG/WebP screenshot. A pasted clipboard blob has no filename, so
-                    the client builds a `File` with a generated name
-                    (`screenshot-<timestamp>.png`) and the blob's real MIME type; the
-                    server only looks at the part's content type, never the filename.
+                    JPEG/PNG/WebP image. A pasted clipboard blob has no filename, so the client
+                    builds a `File` with a generated name (`import-<timestamp>.png`) and the
+                    blob's real MIME type; the server only looks at the part's content type,
+                    never the filename. One image is one receipt entry (no multi-image or
+                    stitched uploads).
                 capturedAt:
                   type: string
                   format: date-time
                   description: |
-                    Optional — when omitted (the PWA's behaviour for screenshots), the server
-                    defaults it to the upload time. The classifier later replaces it with the
-                    purchase date shown in the screenshot, if legible (same
+                    Optional — when omitted (the PWA's behaviour for imports), the server
+                    defaults it to the upload time. The classifier later replaces the date
+                    part with the purchase date shown in the image, if legible (same
                     `classification-batch` rule as for camera photos).
       responses:
         "201":
-          description: Receipt created, `status = PENDING`, `source = SCREENSHOT`.
+          description: Receipt created, `status = PENDING`, `source = IMAGE_IMPORT`.
           content:
             application/json:
               schema:
@@ -248,12 +259,13 @@ paths:
       summary: Lean list of pending receipt ids
       description: |
         **Called by classify-receipts.sh.** Returns every receipt currently `PENDING`.
-        Deliberately lean for the image-backed sources, `CAMERA` and `SCREENSHOT`
+        Deliberately lean for the image-backed sources, `CAMERA` and `IMAGE_IMPORT`
         (`{id, source}` only, no image bytes/path) — the script fetches each image
         separately via `GET /receipts/{id}/image`, keeping this endpoint free of
         filesystem-path details. **`source` is always present** and is how the script
-        learns whether an image is a photographed receipt or a screenshot, so it can tag
-        that image's line in the prompt manifest (`source=SCREENSHOT`, ADR-014). The
+        learns whether an image was captured live by the camera or imported from the
+        device, so it can tag that image's line in the prompt manifest
+        (`source=IMAGE_IMPORT`, ADR-014). The
         image's file type is *not* repeated here — the script derives it from the
         `Content-Type` of the `GET /receipts/{id}/image` response. **Pure read — never
         mutates status** (see the lifecycle note in this document's top-level
@@ -407,14 +419,14 @@ paths:
       summary: Raw receipt image bytes
       description: |
         **Called by classify-receipts.sh** to download each pending receipt's image (a
-        camera photo or a screenshot) to a local temp file before invoking `claude`. Also
+        camera photo or an imported image) to a local temp file before invoking `claude`. Also
         used by the PWA to render the image in the receipt detail view.
 
         The response `Content-Type` is authoritative for the bytes' real format
         (`image/jpeg`, `image/png` or `image/webp` — derived from the stored file's
         extension) and is **load-bearing for the script**: it maps the type to the temp
         file's extension (`.jpg` / `.png` / `.webp`) so the `Read` tool decodes a PNG
-        screenshot as a PNG. Do not change the type mapping without updating
+        imported screenshot as a PNG. Do not change the type mapping without updating
         `classify-receipts.sh`.
       operationId: getReceiptImage
       responses:
@@ -464,11 +476,11 @@ paths:
         guessed the way a `CAMERA` line item's can). Each such entry transitions its
         receipt to `NEEDS_CATEGORY_REVIEW` rather than forcing a guess — resolved by hand
         via `PUT /receipts/{id}/category`. An image-backed receipt id (`CAMERA` or
-        `SCREENSHOT`) must never appear in this array (their "always guess" policy is
+        `IMAGE_IMPORT`) must never appear in this array (their "always guess" policy is
         unchanged); if one does, that entry is tolerated like an unknown `receiptId` —
         skipped and reported, never a 400. See `docs/architecture/06-bank-integration.md`.
 
-        `SCREENSHOT` receipts use this endpoint with **no special-casing**: an `items`
+        `IMAGE_IMPORT` receipts use this endpoint with **no special-casing**: an `items`
         entry (itemized like a photo receipt) or a `failures` entry (e.g. the image is not a
         purchase record at all) — both handled exactly as for `CAMERA`.
       operationId: submitClassificationBatch
@@ -1009,15 +1021,17 @@ components:
 
     ReceiptSource:
       type: string
-      enum: [CAMERA, SCREENSHOT, MANUAL, BANK_IMPORT]
+      enum: [CAMERA, IMAGE_IMPORT, MANUAL, BANK_IMPORT]
       description: |
-        Where the receipt came from. `CAMERA` — photo of a paper receipt
-        (`POST /receipts`). `SCREENSHOT` — pasted/picked screenshot of a digital receipt,
-        order summary or payment confirmation (`POST /receipts/screenshot`, ADR-014).
-        `CAMERA` and `SCREENSHOT` are both image-backed (`imageUrl` is set), created
-        `PENDING`, and classified by the daily batch; the classifier is told which one it
-        is reading. `MANUAL` — typed in (`POST /receipts/manual`), no image, created
-        `PROCESSED`. Immutable after creation.
+        Where the receipt came from — the *channel*, not a guarantee about the image content.
+        `CAMERA` — captured live by the in-app camera input (`POST /receipts`). `IMAGE_IMPORT` —
+        an existing image the user imported: picked from the phone gallery / file picker, pasted
+        from the clipboard, or dropped (`POST /receipts/image-import`, ADR-014); it may be a
+        screenshot of a digital receipt/order or a photo of a paper receipt taken earlier, and
+        the classifier decides by looking. `CAMERA` and `IMAGE_IMPORT` are both image-backed
+        (`imageUrl` is set), created `PENDING`, and classified by the daily batch; the
+        classifier is told which one it is reading. `MANUAL` — typed in
+        (`POST /receipts/manual`), no image, created `PROCESSED`. Immutable after creation.
         `BANK_IMPORT` is design-only (ADR-007, not implemented) — no endpoint returns it yet.
 
     SpendCategory:
@@ -1213,7 +1227,7 @@ components:
       type: object
       required: [id, source]
       description: |
-        `source = CAMERA` or `SCREENSHOT` uses only `id` + `source` — classify-receipts.sh
+        `source = CAMERA` or `IMAGE_IMPORT` uses only `id` + `source` — classify-receipts.sh
         fetches the image separately via GET /receipts/{id}/image and tags that image's
         manifest line with `source=<value>` (ADR-014). `source` is always present: the
         backend must populate it for every entry (older versions of this endpoint returned
@@ -1226,7 +1240,7 @@ components:
         source:
           allOf:
             - $ref: "#/components/schemas/ReceiptSource"
-          description: "Live values here: `CAMERA`, `SCREENSHOT` (`BANK_IMPORT` is design-only)."
+          description: "Live values here: `CAMERA`, `IMAGE_IMPORT` (`BANK_IMPORT` is design-only)."
         counterpartyName: { type: string, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007)." }
         transactionTitle: { type: string, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007)." }
         amount: { type: number, format: double, nullable: true, description: "BANK_IMPORT only (design-only, ADR-007) — the known bank_transaction_amount." }
@@ -1316,7 +1330,7 @@ components:
       required: [receiptId, reason]
       properties:
         receiptId: { type: integer, format: int64 }
-        reason: { type: string, description: "Free text from the classifier, e.g. \"photo too blurry to read any line items\" or, for a SCREENSHOT, \"screenshot does not show a purchase\"." }
+        reason: { type: string, description: "Free text from the classifier, e.g. \"photo too blurry to read any line items\" or, for an imported screenshot, \"image does not show a purchase\"." }
 
     ClassificationBatchUncertain:
       type: object
@@ -1324,7 +1338,7 @@ components:
       description: |
         Design-only (ADR-007, not implemented). A BANK_IMPORT receipt id Claude wasn't
         confident enough to assign one of the 11 categories to — never valid for a CAMERA
-        or SCREENSHOT id, whose existing "always guess" policy is unchanged. Routes the
+        or IMAGE_IMPORT id, whose existing "always guess" policy is unchanged. Routes the
         receipt to NEEDS_CATEGORY_REVIEW instead of forcing a guess.
       properties:
         receiptId: { type: integer, format: int64 }

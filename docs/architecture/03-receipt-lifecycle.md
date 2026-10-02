@@ -4,7 +4,7 @@
 >
 > **Design-only addition (ADR-007):** a `BANK_IMPORT` receipt participates in this same status
 > enum plus one new value, `NEEDS_CATEGORY_REVIEW`, reachable only by that source — this document
-> stays focused on the `CAMERA`/`SCREENSHOT`/`MANUAL` shape below unchanged; see
+> stays focused on the `CAMERA`/`IMAGE_IMPORT`/`MANUAL` shape below unchanged; see
 > `06-bank-integration.md`'s own superset state diagram for the full picture including
 > `BANK_IMPORT`.
 
@@ -14,7 +14,7 @@
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING: POST /receipts (CAMERA upload)\nor POST /receipts/screenshot (SCREENSHOT upload)
+    [*] --> PENDING: POST /receipts (CAMERA upload)\nor POST /receipts/image-import (IMAGE_IMPORT upload)
     [*] --> PROCESSED: POST /receipts/manual\n(MANUAL source — skips classification entirely)
 
     PENDING --> PROCESSING: POST /receipts/classification-batch\n(per receiptId, start of its own\ndb write — see note below)
@@ -34,7 +34,7 @@ stateDiagram-v2
 
 | Transition | Trigger | Notes |
 |---|---|---|
-| `[*] → PENDING` | `POST /receipts` (camera upload, `source = CAMERA`) or `POST /receipts/screenshot` (pasted/picked screenshot, `source = SCREENSHOT`) | Returns immediately; no classification on this request. The two sources are indistinguishable to the lifecycle — every transition below behaves identically for both. |
+| `[*] → PENDING` | `POST /receipts` (camera upload, `source = CAMERA`) or `POST /receipts/image-import` (gallery/clipboard import, `source = IMAGE_IMPORT`) | Returns immediately; no classification on this request. The two sources are indistinguishable to the lifecycle — every transition below behaves identically for both. |
 | `[*] → PROCESSED` | `POST /receipts/manual` | Skips `PENDING`/`PROCESSING` entirely — no photo, nothing to classify. Line items are given directly by the user. |
 | `PENDING → PROCESSING → PROCESSED` | `POST /receipts/classification-batch`, one `items[]` entry | Both transitions happen inside the same backend transaction for that receipt — replace its uncorrected line items, recompute `total_amount`, stamp `processed_at`. |
 | `PENDING → PROCESSING → FAILED` | `POST /receipts/classification-batch`, one `failures[]` entry, **or** an `items[]` entry whose `category` doesn't match the fixed 11-value enum | The second case is a backend-side safety net, not something the prompt asks Claude to do — see `04-classification-flow.md` and CLAUDE.md's gate: *"Claude must never invent a category outside the fixed 11 — validate its output against the enum and flag (don't silently coerce) any mismatch."* Flagging = routing that receipt to `FAILED` with an explanatory `failureReason`, exactly as if Claude had reported it as unreadable. |
@@ -45,14 +45,14 @@ stateDiagram-v2
 
 ## `source` Does Not Affect the Lifecycle
 
-`CAMERA` and `SCREENSHOT` receipts are both image-backed, enter at `PENDING`, and go through
+`CAMERA` and `IMAGE_IMPORT` receipts are both image-backed, enter at `PENDING`, and go through
 exactly the same transitions, including `reprocess`, `DELETE` (which removes the image file too) and
 the "classifier returned an out-of-enum category" safety net. `source` is read in only two places:
-`GET /receipts/pending` (so `classify-receipts.sh` can tell the classifier whether an image is a
-photographed paper receipt or a screenshot) and the frontend's fallback title. A non-purchase
-screenshot (a chat, a meme) is reported by the classifier in `failures[]` and lands in `FAILED`
-like any other unreadable receipt; it is recovered by `DELETE` or `reprocess`, never by a special
-state. `MANUAL` still skips `PENDING`/`PROCESSING` entirely.
+`GET /receipts/pending` (so `classify-receipts.sh` can tell the classifier whether an image was
+captured live or imported — a hint only, the classifier still decides from what the image shows) and
+the frontend's fallback title. A non-purchase image (a chat, a meme) is reported by the classifier
+in `failures[]` and lands in `FAILED` like any other unreadable receipt; it is recovered by `DELETE`
+or `reprocess`, never by a special state. `MANUAL` still skips `PENDING`/`PROCESSING` entirely.
 
 ## Why `GET /receipts/pending` Never Appears on This Diagram
 

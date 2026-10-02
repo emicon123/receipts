@@ -8,21 +8,22 @@ whenever a feature shipped. Diagrams and decisions get folded in and kept curren
 
 ## What the system is
 
-A personal receipt-tracking PWA. A photo of a receipt — or a pasted/picked screenshot of a digital
-receipt or order summary — uploads immediately; once a day the Claude Code CLI itself reads every
-pending image, itemizes it, and assigns each line item to one of a fixed 11-value spending
-category enum (see `CLAUDE.md § Categories`). Runs single-user on a home Raspberry Pi behind
-Tailscale — no auth, no per-token billing.
+A personal receipt-tracking PWA, used almost entirely on a phone. A photo of a receipt, or an
+image imported from the phone gallery / clipboard (a screenshot of a digital receipt or order
+summary, or an earlier photo of a paper receipt), uploads immediately; once a day the Claude Code
+CLI itself reads every pending image, itemizes it, and assigns each line item to one of a fixed
+11-value spending category enum (see `CLAUDE.md § Categories`). Runs single-user on a home
+Raspberry Pi behind Tailscale — no auth, no per-token billing.
 
 ## Map of this directory
 
 | Doc | Covers | Status |
 |---|---|---|
 | [01 — System Context](01-system-context.md) | What the running system looks like, how its pieces connect, what a user can do | Implemented |
-| [02 — Domain Model and Schema](02-domain-model-and-schema.md) | DB schema, entities, `classDiagram` for domain/service structure, incl. the `CAMERA`/`SCREENSHOT` image-upload paths | Implemented (`SCREENSHOT` source: **contract done, implementation pending** — Flyway `V3`/`V4`) |
-| [03 — Receipt Status Lifecycle](03-receipt-lifecycle.md) | `receipt_status_enum` state machine (`CAMERA`/`SCREENSHOT`/`MANUAL` sources) | Implemented (`SCREENSHOT`: contract done, implementation pending) |
-| [04 — Capture → Upload → Classify → Correct Flow](04-classification-flow.md) | End-to-end sequence, incl. the PWA capture entry points (camera / paste / pick), the daily batch job and quota-retry path | Implemented (screenshot entry points + `source=`/extension handling: contract done, implementation pending) |
-| [05 — API Contract Summary](05-api-contract.md) | Navigable summary of `docs/openapi.yaml` (the spec is the source of truth) | Implemented (`POST /receipts/screenshot`: contract done, implementation pending) |
+| [02 — Domain Model and Schema](02-domain-model-and-schema.md) | DB schema, entities, `classDiagram` for domain/service structure, incl. the `CAMERA`/`IMAGE_IMPORT` image-upload paths | Implemented (`IMAGE_IMPORT` source: **contract done, implementation pending** — Flyway `V3`/`V4`) |
+| [03 — Receipt Status Lifecycle](03-receipt-lifecycle.md) | `receipt_status_enum` state machine (`CAMERA`/`IMAGE_IMPORT`/`MANUAL` sources) | Implemented (`IMAGE_IMPORT`: contract done, implementation pending) |
+| [04 — Capture → Upload → Classify → Correct Flow](04-classification-flow.md) | End-to-end sequence, incl. the PWA capture entry points (camera / gallery / paste), image normalisation, the daily batch job and quota-retry path | Implemented (gallery/paste entry points + `source=`/extension handling: contract done, implementation pending) |
+| [05 — API Contract Summary](05-api-contract.md) | Navigable summary of `docs/openapi.yaml` (the spec is the source of truth) | Implemented (`POST /receipts/image-import`: contract done, implementation pending) |
 | [06 — PKO BP Bank-Transaction Integration](06-bank-integration.md) | Second receipt source (`BANK_IMPORT`), superset of 02/03/04 for that source | **Design-only** — not yet implemented; see `docs/adr/ADR-007-pko-bp-psd2-integration.md` |
 
 Other design records, outside this directory:

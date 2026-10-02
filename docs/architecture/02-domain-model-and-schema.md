@@ -5,14 +5,14 @@
 > `ddl-auto`. PKs: `BIGSERIAL`. Money: `NUMERIC(10,2)`, never `FLOAT`/`DOUBLE`. Timestamps:
 > `TIMESTAMPTZ`. Canonical migrations: `backend/src/main/resources/db/migration/V1__init.sql`
 > (initial schema), `V2__line_item_subcategories.sql` (adds `subcategory`/`sub_subcategory`),
-> `V3__receipt_source_screenshot.sql` (adds the `SCREENSHOT` source value) and
-> `V4__receipt_image_path_screenshot_check.sql` (extends the `image_path`/`source` CHECK to it).
+> `V3__receipt_source_image_import.sql` (adds the `IMAGE_IMPORT` source value) and
+> `V4__receipt_image_path_image_import_check.sql` (extends the `image_path`/`source` CHECK to it).
 
 ---
 
 ## Domain Overview
 
-Two tables carry the core domain: a `receipts` header row per photographed, screenshotted,
+Two tables carry the core domain: a `receipts` header row per photographed, imported-image,
 manually-entered, or bank-imported receipt, and a `receipt_line_items` row per
 product/whole-transaction category on it. Categories are a fixed 11-value Postgres enum, not a lookup table (see ADR-005) — the
 canonical source of truth for what each value means is `CLAUDE.md § Categories` at the repo root;
@@ -28,7 +28,7 @@ this document only translates that table into SQL, it does not redefine the rule
 This is the schema as it exists after `V1`–`V4` today (two tables). `V2` is purely additive — two
 nullable free-text columns on `receipt_line_items`, no new table, no new enum (see ADR-010:
 `subcategory`/`sub_subcategory` are a free-text layer, deliberately not extending
-`spend_category_enum`'s fixed-list approach from ADR-005). `V3`/`V4` add the `SCREENSHOT` source
+`spend_category_enum`'s fixed-list approach from ADR-005). `V3`/`V4` add the `IMAGE_IMPORT` source
 value and extend the `image_path`/`source` CHECK to it (no new column, no new table — see
 § Image Upload Paths below). See `06-bank-integration.md` for the full updated ER diagram including
 `BANK_IMPORT`'s two new columns and the `bank_connection`/`bank_transaction_log` tables — not
@@ -42,8 +42,8 @@ erDiagram
     receipts {
         bigint id PK
         receipt_status_enum status "DEFAULT PENDING"
-        receipt_source_enum source "CAMERA, SCREENSHOT or MANUAL — immutable"
-        text image_path "NOT NULL for CAMERA/SCREENSHOT, NULL for MANUAL"
+        receipt_source_enum source "CAMERA, IMAGE_IMPORT or MANUAL — immutable"
+        text image_path "NOT NULL for CAMERA/IMAGE_IMPORT, NULL for MANUAL"
         timestamptz captured_at
         varchar store_name "200, NULL until processed"
         numeric total_amount "10,2 DEFAULT 0 — derived, never entered directly"
@@ -70,7 +70,7 @@ erDiagram
 ```sql
 CREATE TYPE receipt_status_enum AS ENUM ('PENDING', 'PROCESSING', 'PROCESSED', 'FAILED');
 CREATE TYPE receipt_source_enum AS ENUM ('CAMERA', 'MANUAL');   -- V1
-ALTER TYPE receipt_source_enum ADD VALUE 'SCREENSHOT';           -- V3 (own migration — see below)
+ALTER TYPE receipt_source_enum ADD VALUE 'IMAGE_IMPORT';        -- V3 (own migration — see below)
 CREATE TYPE spend_category_enum AS ENUM (
     'ALKO', 'JEDZENIE_KONIECZNE', 'JEDZENIE_SREDNIE', 'JEDZENIE_PIERDOLOWATE',
     'RZECZY_PALIWO_INNE_ROZNE', 'RZECZY_LUKSUSOWE', 'MYCIE_CHEMIA',
@@ -79,7 +79,7 @@ CREATE TYPE spend_category_enum AS ENUM (
 ```
 
 > **Design-only addition (ADR-007, not yet migrated):** `receipt_source_enum` gains a further value
-> `BANK_IMPORT` (after `SCREENSHOT`; its migration must also keep `ADD VALUE` in a migration of its
+> `BANK_IMPORT` (after `IMAGE_IMPORT`; its migration must also keep `ADD VALUE` in a migration of its
 > own, ahead of the one that uses it), and `receipt_status_enum` gains a fifth value `NEEDS_CATEGORY_REVIEW` (reachable
 > only by `BANK_IMPORT` receipts). Full detail, new columns, and new tables in
 > `06-bank-integration.md`.
@@ -102,16 +102,16 @@ CREATE TYPE spend_category_enum AS ENUM (
    server-side rejection of an invalid category value (see `03-receipt-lifecycle.md`) — never as
    a side effect of a script/CLI-level failure.
 4. **Money is `NUMERIC(10,2)`, never `FLOAT`/`DOUBLE`**, matching CLAUDE.md's quality gate.
-5. **A `CAMERA` or `SCREENSHOT` receipt always has an `image_path`; a `MANUAL` one never does** —
+5. **A `CAMERA` or `IMAGE_IMPORT` receipt always has an `image_path`; a `MANUAL` one never does** —
    enforced at the DB level by the `receipts_image_path_matches_source` `CHECK` constraint
-   (`(source IN ('CAMERA','SCREENSHOT') AND image_path IS NOT NULL) OR (source = 'MANUAL' AND
+   (`(source IN ('CAMERA','IMAGE_IMPORT') AND image_path IS NOT NULL) OR (source = 'MANUAL' AND
    image_path IS NULL)`), not left to application-layer discipline alone. `source` is immutable
    after insert.
 6. **`failure_reason` is set if and only if `status = 'FAILED'`** — also a DB-level `CHECK`, so a
    `reprocess` (which resets both together) can't accidentally leave a stale reason behind, and
    nothing else can set a reason without also setting the status.
 7. **(Design-only, ADR-007) `NEEDS_CATEGORY_REVIEW` is reachable only by `BANK_IMPORT` receipts.**
-   `CAMERA`/`SCREENSHOT`/`MANUAL` line-item classification keeps its existing "always guess, human
+   `CAMERA`/`IMAGE_IMPORT`/`MANUAL` line-item classification keeps its existing "always guess, human
    corrects later" policy unchanged — this new status exists only for whole-transaction bank
    classification, where an unconfident guess must not be forced through. See
    `06-bank-integration.md`.
@@ -154,7 +154,7 @@ CREATE TYPE spend_category_enum AS ENUM (
 
 Backs the manual-entry form's "Sklep / dostawca" combobox with "most used / last used"
 autocomplete suggestions, drawn from `receipts.store_name` across **every** receipt — any
-`status`, any `source` (`CAMERA`, `SCREENSHOT` and `MANUAL` all write this field today; `BANK_IMPORT` will
+`status`, any `source` (`CAMERA`, `IMAGE_IMPORT` and `MANUAL` all write this field today; `BANK_IMPORT` will
 too once `06-bank-integration.md` lands — see that doc's note on `store_name` reuse). Full
 endpoint contract in `docs/openapi.yaml`; ranking rationale in ADR-009. This section fixes the
 exact query shape so Backend doesn't have to re-derive it.
@@ -397,14 +397,17 @@ classDiagram
 
 ---
 
-## Image Upload Paths (`CAMERA` / `SCREENSHOT`)
+## Image Upload Paths (`CAMERA` / `IMAGE_IMPORT`)
 
-Two endpoints create an image-backed, `PENDING` receipt — `POST /receipts` (a photographed paper
-receipt, `source = CAMERA`) and `POST /receipts/screenshot` (a pasted/picked screenshot of a digital
-receipt, `source = SCREENSHOT`). Everything downstream of creation — the pending list, the image
-download, `classification-batch`, correction, reprocess, delete, the dashboard — is
-source-agnostic; the only places `source` is read are the pending list (so the script can tag the
-image for the classifier, see `04-classification-flow.md`) and the frontend's fallback title.
+Two endpoints create an image-backed, `PENDING` receipt — `POST /receipts` (an image captured live by
+the camera input, `source = CAMERA`) and `POST /receipts/image-import` (an existing image the user
+imported from the phone gallery, file picker or clipboard, `source = IMAGE_IMPORT`). `source` names
+the **channel**, not the content: an imported image may be a screenshot of a digital receipt or a
+photo of a paper one, and the classifier decides by looking. Everything downstream of creation —
+the pending list, the image download, `classification-batch`, correction, reprocess, delete, the
+dashboard — is source-agnostic; the only places `source` is read are the pending list (so the script
+can tag the image for the classifier, see `04-classification-flow.md`) and the frontend's fallback
+title.
 
 ```mermaid
 classDiagram
@@ -412,7 +415,7 @@ classDiagram
     class ReceiptController {
         <<RestController>>
         +upload(image, capturedAt) ReceiptSummaryResponse
-        +uploadScreenshot(image, capturedAt) ReceiptSummaryResponse
+        +importImage(image, capturedAt) ReceiptSummaryResponse
     }
     class ReceiptService {
         <<Transaction Script>>
@@ -427,7 +430,7 @@ classDiagram
     class ReceiptSource {
         <<enum>>
         CAMERA
-        SCREENSHOT
+        IMAGE_IMPORT
         MANUAL
     }
     class ImageStorageService {
@@ -446,7 +449,7 @@ classDiagram
     Receipt --> ReceiptSource
     ReceiptService ..> PendingReceiptRef : maps
     PendingReceiptRef --> ReceiptSource
-    note for ReceiptController "upload() passes CAMERA, uploadScreenshot() passes SCREENSHOT; both are multipart with an image part and an optional capturedAt"
+    note for ReceiptController "upload() passes CAMERA, importImage() passes IMAGE_IMPORT; both are multipart with an image part and an optional capturedAt"
     note for Receipt "newImageUpload() rejects MANUAL with IllegalArgumentException; MANUAL keeps its own named factory"
 ```
 
@@ -456,12 +459,14 @@ classDiagram
   saves it, defaulting `capturedAt` to now. One method for both paths (**DRY**); the controller
   decides the source, so a client can never choose one.
 - **Named static factory (existing `Receipt` idiom)** — `Receipt.newImageUpload(source, …)` replaces
-  `newCameraUpload` and accepts `CAMERA` or `SCREENSHOT` only. `newManualEntry` stays separate
+  `newCameraUpload` and accepts `CAMERA` or `IMAGE_IMPORT` only. `newManualEntry` stays separate
   because it differs in status, processing time and image.
 - **Controller stays thin (SRP)** — two `@PostMapping` methods that differ only in the
-  `ReceiptSource` constant passed to the service; the image allow-list, size limit and
-  `UnsupportedImageTypeException` handling already live in `FilesystemImageStorageService` and
-  `GlobalExceptionHandler` and are reused unchanged.
+  `ReceiptSource` constant passed to the service; the image allow-list (JPEG/PNG/WebP), size limit
+  and `UnsupportedImageTypeException` handling already live in `FilesystemImageStorageService` and
+  `GlobalExceptionHandler` and are reused unchanged. **No new server-side image validation or
+  conversion** — HEIC/other formats are normalised to JPEG by the PWA before upload (see
+  `04-classification-flow.md` § Capture Entry Points, ADR-014).
 - **Mapping** — `PendingReceiptRef` gains `source` (the OpenAPI schema already required it);
   `ReceiptMapper`'s `source` mapping on `ReceiptSummary`/`ReceiptDetail` needs no change.
 - **Rejected:** a Strategy/handler per source, a `source` form field on `POST /receipts`, and a
@@ -473,7 +478,7 @@ versioned migration in its own transaction, so `V3` contains only the `ADD VALUE
 re-created `receipts_image_path_matches_source` constraint. `spring.flyway.group` must stay `false`.
 `V1`/`V2` are never edited (recorded checksums). The existing `Receipt.source` mapping
 (`@Enumerated(STRING)` + `@JdbcTypeCode(NAMED_ENUM)`) works with the new value as long as the Java
-`ReceiptSource` enum gains `SCREENSHOT`.
+`ReceiptSource` enum gains `IMAGE_IMPORT`.
 
 ---
 
@@ -502,8 +507,8 @@ repeated per endpoint, since the same reasoning applies uniformly across this ap
 | `GET /spending/subcategory-summary` as a new aggregate endpoint vs. 11× `/spending/line-items` or a nested field on `/spending/summary` (ADR-013) | **adopted (new endpoint)** | One small aggregate call for one chart; keeps `/spending/summary` (eager) unchanged and avoids shipping every line item of the month to draw bar segments. Fetched lazily only in "Szczegóły" mode. |
 | Server-side top-N + "Reszta" bucketing (ADR-013) | **rejected** | N is a presentation choice (bar width, legibility); the client needs the full list anyway for the accessible table fallback, and bucketing ≤ ~13 entries per bar is trivial. Server returns full sorted sums. |
 | Extract shared `LabelNormalization` helper from `SubcategoryLabelGrouper` | **adopted** | DRY with exactly two real consumers of the ADR-010 §5 normalize/casing rule — not speculative. Separate aggregator class keeps SRP (summing ≠ ranking). |
-| New `SCREENSHOT` source value vs. reusing `CAMERA` (ADR-014) | **adopted (new value)** | The origin must reach the classifier prompt and the UI label, and cannot be recovered retroactively once screenshot and photo rows are mixed. `source` already means "origin", so one enum value + one CHECK extension beats a second "capture kind" column or a file-type heuristic. |
-| `POST /receipts/screenshot` vs. a `source` form field on `POST /receipts` (ADR-014) | **adopted (new endpoint)** | Leaves the camera contract untouched, mirrors `/receipts/manual` (one path per origin), and means no client-supplied enum to validate. |
+| New `IMAGE_IMPORT` source value vs. reusing `CAMERA`, or naming it `SCREENSHOT` (ADR-014) | **adopted (`IMAGE_IMPORT`)** | The origin must reach the classifier prompt and the UI label, and cannot be recovered retroactively once live-camera and imported rows are mixed. `source` already means "origin", so one enum value + one CHECK extension beats a second "capture kind" column or a file-type heuristic. Named for the channel because the main phone path imports gallery photos of paper receipts as well as screenshots — `SCREENSHOT` would be wrong for half of them. |
+| `POST /receipts/image-import` vs. a `source` form field on `POST /receipts` (ADR-014) | **adopted (new endpoint)** | Leaves the camera contract untouched, mirrors `/receipts/manual` (one path per origin), and means no client-supplied enum to validate. |
 | Strategy / per-source upload handler classes | **rejected** | The two uploads differ by one enum constant; `uploadImageReceipt(…, source)` covers both. YAGNI. |
 
 **Bank-import additions (design-only, ADR-007):** Ports & Adapters for the PSD2 client, and
