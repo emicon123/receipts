@@ -7,13 +7,16 @@
 > **Status:** design-only. Nothing described here is implemented yet — this is the shared
 > contract for the follow-up Backend/Frontend/DevOps work (see "Follow-Up Work" at the bottom).
 > The schema shapes below are illustrative SQL, not an executable Flyway migration; Backend owns
-> writing the actual `V{n}__bank_import.sql` against this design.
+> writing the actual `V{n}__bank_import.sql` against this design. `V3`/`V4` are already taken by
+> the `IMAGE_IMPORT` source (ADR-014), so use the next free version — and, like `V3`, put the
+> `ALTER TYPE … ADD VALUE` statements in a migration **of their own**, ahead of the one that uses
+> the new values (PostgreSQL cannot use a new enum value in the transaction that adds it).
 
 ---
 
 ## What This Adds
 
-A second way a receipt enters the system, alongside a photographed `CAMERA` receipt or a
+A second way a receipt enters the system, alongside a camera-captured `CAMERA` receipt, an imported-image `IMAGE_IMPORT` receipt, or a
 hand-typed `MANUAL` one: a **`BANK_IMPORT`** receipt, created automatically once a day from the
 user's PKO Bank Polski transaction history via PSD2 account-information access (ADR-007).
 
@@ -21,7 +24,7 @@ Two things make `BANK_IMPORT` different from the other two sources:
 - **No image, no per-line-item breakdown.** A bank transaction only ever gives a counterparty
   name, a free-text title, an amount, and a date — never a product-level itemization. Its
   classification is a **whole-transaction** category assignment (one line item), not the
-  many-line-items-per-receipt shape `CAMERA`/`MANUAL` use.
+  many-line-items-per-receipt shape `CAMERA`/`IMAGE_IMPORT`/`MANUAL` use.
 - **It might not become a receipt at all.** If it confidently matches a photo the user already
   took of the same purchase, it's silently discarded — see "Dedup: Silent Discard" below.
 
@@ -65,10 +68,12 @@ classifier echo a known amount back rather than inventing one.
 Updated `CHECK` constraints (extending, not replacing, the ones already in `V1__init.sql`):
 
 ```sql
--- image_path: now excludes BANK_IMPORT too (was CAMERA vs MANUAL only)
+-- image_path: now excludes BANK_IMPORT too. After V4 (ADR-014) the live constraint is
+-- (source IN ('CAMERA','IMAGE_IMPORT') AND image_path IS NOT NULL) OR (source = 'MANUAL' AND image_path IS NULL);
+-- this migration extends that, it does not restore the older CAMERA-only form.
 ALTER TABLE receipts DROP CONSTRAINT receipts_image_path_matches_source;
 ALTER TABLE receipts ADD CONSTRAINT receipts_image_path_matches_source CHECK (
-    (source = 'CAMERA' AND image_path IS NOT NULL) OR
+    (source IN ('CAMERA', 'IMAGE_IMPORT') AND image_path IS NOT NULL) OR
     (source IN ('MANUAL', 'BANK_IMPORT') AND image_path IS NULL)
 );
 
@@ -152,8 +157,8 @@ erDiagram
     receipts {
         bigint id PK
         receipt_status_enum status "PENDING/PROCESSING/PROCESSED/FAILED/NEEDS_CATEGORY_REVIEW"
-        receipt_source_enum source "CAMERA / MANUAL / BANK_IMPORT"
-        text image_path "NULL unless source = CAMERA"
+        receipt_source_enum source "CAMERA / IMAGE_IMPORT / MANUAL / BANK_IMPORT"
+        text image_path "NOT NULL for CAMERA / IMAGE_IMPORT, else NULL"
         timestamptz captured_at
         varchar store_name "200 — also holds BANK_IMPORT's counterparty name"
         numeric total_amount "10,2 DEFAULT 0 — derived, never entered directly"
@@ -223,7 +228,7 @@ otherwise → import as its own `BANK_IMPORT` receipt.
 flowchart TD
     A["New bank transaction from PKO<br/>(during daily sync)"] --> B{"external_transaction_id<br/>already in bank_transaction_log?"}
     B -- yes --> Z["Skip — already handled<br/>in a prior run"]
-    B -- no --> C{"Exactly one PROCESSED<br/>CAMERA/MANUAL receipt with<br/>total_amount = txn.amount AND<br/>captured_at within 2 days?"}
+    B -- no --> C{"Exactly one PROCESSED<br/>CAMERA/IMAGE_IMPORT/MANUAL receipt with<br/>total_amount = txn.amount AND<br/>captured_at within 2 days?"}
     C -- "yes (confident match)" --> D["DISCARDED_DUPLICATE<br/>log row only — no receipt created"]
     C -- "no match, or 2+ candidates" --> E["Create BANK_IMPORT receipt<br/>(status = PENDING)<br/>+ IMPORTED log row"]
 ```
@@ -249,7 +254,7 @@ Two mitigations, together:
    photos are `PROCESSED` (a real `total_amount`) before the forward dedup check runs against
    them in the common case.
 2. **A symmetric second trigger, for the reverse ordering**: whenever an itemized receipt
-   (`CAMERA` or `MANUAL`) newly reaches `PROCESSED` — via `POST /receipts/classification-batch` or
+   (`CAMERA`, `IMAGE_IMPORT` or `MANUAL`) newly reaches `PROCESSED` — via `POST /receipts/classification-batch` or
    `POST /receipts/manual` — the *same* matching heuristic runs once more, this time checking the
    new receipt against existing, not-yet-discarded `BANK_IMPORT` receipts (any status —
    `PENDING`, `PROCESSED`, or `NEEDS_CATEGORY_REVIEW`). A late-discovered match:
@@ -273,13 +278,13 @@ app at this scale.
 A `BANK_IMPORT` receipt is created `PENDING` (unless silently discarded — see above), with **zero
 line items**, `total_amount = 0`, `bank_transaction_title` and `bank_transaction_amount` already
 known from the sync. It re-enters the *existing* daily classification pipeline
-(`docs/architecture/04-classification-flow.md`) alongside `CAMERA` receipts — reusing the one
+(`docs/architecture/04-classification-flow.md`) alongside `CAMERA`/`IMAGE_IMPORT` receipts — reusing the one
 batched `claude -p` invocation rather than a second, separate call (keeps ADR-002's cost
 reasoning intact: still exactly one invocation per day).
 
 ### `GET /receipts/pending` carries the transaction inline — there's no image to fetch
 
-For a `CAMERA` id, the wrapper script still downloads the photo via `GET /receipts/{id}/image`
+For a `CAMERA` or `IMAGE_IMPORT` id, the wrapper script still downloads the image via `GET /receipts/{id}/image`
 before building the prompt manifest. A `BANK_IMPORT` id has no image endpoint to call — instead
 `GET /receipts/pending`'s response includes everything Claude needs **inline**:
 
@@ -302,7 +307,7 @@ See `docs/openapi.yaml`'s updated `PendingReceiptRef` schema.
 ### Three-way classification outcome (was two-way)
 
 `classify-receipts.sh`'s manifest stays one line per pending id, appended after `prompt.md`'s
-static template (unchanged mechanism) — a `CAMERA` line still carries a local image `path=`
+static template (unchanged mechanism) — a `CAMERA`/`IMAGE_IMPORT` line still carries a local image `path=` (plus `source=`)
 (unchanged), a `BANK_IMPORT` line instead carries its transaction facts inline
 (`counterparty=`/`title=`/`amount=`/`date=`, new). Claude tells the two apart by which fields are
 present on each line, not by a section heading — see `infra/classify/prompt.md`, which is written
@@ -321,7 +326,7 @@ classification. Claude's JSON reply gains a third array:
 ```
 
 Rules (see `docs/openapi.yaml`'s `ClassificationBatchRequest` and `infra/classify/prompt.md`):
-- A `CAMERA` id must appear in exactly one of `items`/`failures` — **never** `uncertainCategory`;
+- A `CAMERA` or `IMAGE_IMPORT` id must appear in exactly one of `items`/`failures` — **never** `uncertainCategory`;
   the existing "always guess, a human corrects later" policy for photo line items is unchanged.
 - A `BANK_IMPORT` id must appear in exactly one of `items` (confident — exactly one `lineItems`
   entry, echoing `bank_transaction_amount` back unchanged), `uncertainCategory` (not confident —
@@ -373,7 +378,7 @@ stateDiagram-v2
     NEEDS_CATEGORY_REVIEW --> [*]: DELETE
 ```
 
-`03-receipt-lifecycle.md`'s existing diagram and table remain correct for `CAMERA`/`MANUAL`
+`03-receipt-lifecycle.md`'s existing diagram and table remain correct for `CAMERA`/`IMAGE_IMPORT`/`MANUAL`
 receipts unchanged; this is the superset that also covers `BANK_IMPORT`.
 
 ---
@@ -431,7 +436,7 @@ sequenceDiagram
             PKO-->>Backend: transactions (or a per-account transient error — logged, skipped, run continues)
         end
         loop for each transaction not already in bank_transaction_log
-            Backend->>DB: dedup check against PROCESSED CAMERA/MANUAL receipts (see flowchart above)
+            Backend->>DB: dedup check against PROCESSED CAMERA/IMAGE_IMPORT/MANUAL receipts (see flowchart above)
             alt confident match
                 Backend->>DB: bank_transaction_log row, outcome = DISCARDED_DUPLICATE
             else no match
@@ -481,7 +486,7 @@ See `docs/openapi.yaml` for the full contract. New/changed operations:
 | DELETE | `/api/bank/connection` | Disconnect / clear stored tokens locally. |
 | POST | `/api/bank/sync` | **New sync-job entry point**, mirrors `classification-batch`'s shape — fetch, dedup, import; always `200`, degrades to a no-op on expired consent. |
 | PUT | `/api/receipts/{id}/category` | Resolve a `NEEDS_CATEGORY_REVIEW` receipt by hand. |
-| GET | `/api/receipts` | Gains an optional `source` filter (`CAMERA`/`MANUAL`/`BANK_IMPORT`). |
+| GET | `/api/receipts` | Gains an optional `source` filter (`CAMERA`/`IMAGE_IMPORT`/`MANUAL`/`BANK_IMPORT`). |
 | GET | `/api/receipts/pending` | Response extended — inline transaction fields for `BANK_IMPORT` entries (no image to fetch). |
 | POST | `/api/receipts/classification-batch` | Request gains `uncertainCategory[]`; response gains `needsCategoryReview[]`. |
 

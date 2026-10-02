@@ -8,7 +8,9 @@
 ## What the System Is
 
 A personal receipt-tracking web application. The user photographs a shopping receipt with their
-phone (a mobile web app installed to the home screen); the photo uploads immediately; once a
+phone (a mobile web app installed to the home screen) — or imports an existing image from the
+phone gallery or clipboard, e.g. a screenshot of a digital receipt or an earlier photo
+(`IMAGE_IMPORT` source, ADR-014); the image uploads immediately; once a
 day the **Claude Code CLI itself** — not an embedded Anthropic SDK call — reads every new
 receipt, itemizes it, assigns each product to one of 11 fixed spending categories, and computes
 totals. Purpose: see exactly how much is spent per month in each category (healthy food vs.
@@ -50,7 +52,7 @@ Raspberry Pi host (OUTSIDE Docker)
 ├── infra/classify/classify-receipts.sh — daily cron (06:00 Warsaw primary run, plus a few
 │   same-day safety-net slots — see 04-classification-flow.md): shells out to the
 │   host-installed `claude` CLI (`claude -p --allowedTools Read`) to classify every PENDING
-│   receipt (both CAMERA photos and BANK_IMPORT transaction text — see
+│   receipt (CAMERA photos, IMAGE_IMPORT images, and BANK_IMPORT transaction text — see
 │   06-bank-integration.md) in one batched invocation, then POSTs the result back to the
 │   backend over the same internal network. This is the only component in the system that
 │   does not run inside Docker — same shape as investing-app's infra/news/news-research.sh.
