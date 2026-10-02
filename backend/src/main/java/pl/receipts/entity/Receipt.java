@@ -24,9 +24,9 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 /**
- * Aggregate root — one row per photographed-or-manually-entered receipt. See
+ * Aggregate root — one row per photographed, imported-image or manually-entered receipt. See
  * docs/architecture/02-domain-model-and-schema.md for the full narrative and
- * V1__init.sql for the executable schema this entity must match exactly (no ddl-auto).
+ * the db/migration scripts for the executable schema this entity must match exactly (no ddl-auto).
  */
 @Entity
 @Table(name = "receipts")
@@ -87,8 +87,12 @@ public class Receipt {
         this.createdAt = Instant.now();
     }
 
-    public static Receipt newCameraUpload(String imagePath, Instant capturedAt) {
-        return new Receipt(ReceiptStatus.PENDING, ReceiptSource.CAMERA, imagePath, capturedAt, null);
+    /** An image-backed receipt awaiting classification; {@code source} is CAMERA or IMAGE_IMPORT only. */
+    public static Receipt newImageUpload(ReceiptSource source, String imagePath, Instant capturedAt) {
+        if (source != ReceiptSource.CAMERA && source != ReceiptSource.IMAGE_IMPORT) {
+            throw new IllegalArgumentException("an image upload must be CAMERA or IMAGE_IMPORT, not " + source);
+        }
+        return new Receipt(ReceiptStatus.PENDING, source, imagePath, capturedAt, null);
     }
 
     public static Receipt newManualEntry(Instant capturedAt, String storeName) {

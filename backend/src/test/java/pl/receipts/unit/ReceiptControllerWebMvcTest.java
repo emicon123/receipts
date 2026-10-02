@@ -4,7 +4,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
@@ -30,6 +32,7 @@ import pl.receipts.dto.receipt.ReceiptSummary;
 import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.exception.ReceiptStateConflictException;
+import pl.receipts.exception.UnsupportedImageTypeException;
 import pl.receipts.service.LineItemCorrectionService;
 import pl.receipts.service.ReceiptService;
 import pl.receipts.storage.LoadedImage;
@@ -51,12 +54,13 @@ class ReceiptControllerWebMvcTest {
         var file = new MockMultipartFile("image", "r.jpg", "image/jpeg", "bytes".getBytes());
         var summary = new ReceiptSummary(1L, ReceiptStatus.PENDING, ReceiptSource.CAMERA, Instant.now(),
                 null, BigDecimal.ZERO, "/api/receipts/1/image", null, Instant.now());
-        given(receiptService.uploadCameraReceipt(any(), any())).willReturn(summary);
+        given(receiptService.uploadImageReceipt(any(), any(), eq(ReceiptSource.CAMERA))).willReturn(summary);
 
         mockMvc.perform(multipart("/api/receipts").file(file))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.id").value(1))
-                .andExpect(jsonPath("$.data.status").value("PENDING"));
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.source").value("CAMERA"));
     }
 
     @Test
@@ -68,8 +72,8 @@ class ReceiptControllerWebMvcTest {
         var summary = new ReceiptSummary(1L, ReceiptStatus.PENDING, ReceiptSource.CAMERA,
                 Instant.parse("2026-08-15T10:00:00Z"), null, BigDecimal.ZERO, "/api/receipts/1/image", null,
                 Instant.now());
-        given(receiptService.uploadCameraReceipt(any(), eq(Instant.parse("2026-08-15T10:00:00Z"))))
-                .willReturn(summary);
+        given(receiptService.uploadImageReceipt(any(), eq(Instant.parse("2026-08-15T10:00:00Z")),
+                eq(ReceiptSource.CAMERA))).willReturn(summary);
 
         mockMvc.perform(multipart("/api/receipts").file(file).param("capturedAt", "2026-08-15T10:00:00Z"))
                 .andExpect(status().isCreated())
@@ -82,6 +86,78 @@ class ReceiptControllerWebMvcTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.errors[0].code").exists());
         verifyNoInteractions(receiptService);
+    }
+
+    @Test
+    void importImageReturns201WithImageImportSource() throws Exception {
+        var file = new MockMultipartFile("image", "import-20261002-101500.png", "image/png", "bytes".getBytes());
+        var summary = new ReceiptSummary(2L, ReceiptStatus.PENDING, ReceiptSource.IMAGE_IMPORT, Instant.now(),
+                null, BigDecimal.ZERO, "/api/receipts/2/image", null, Instant.now());
+        given(receiptService.uploadImageReceipt(any(), any(), eq(ReceiptSource.IMAGE_IMPORT))).willReturn(summary);
+
+        mockMvc.perform(multipart("/api/receipts/image-import").file(file))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.id").value(2))
+                .andExpect(jsonPath("$.data.status").value("PENDING"))
+                .andExpect(jsonPath("$.data.source").value("IMAGE_IMPORT"))
+                .andExpect(jsonPath("$.data.imageUrl").value("/api/receipts/2/image"))
+                .andExpect(jsonPath("$.meta").exists());
+    }
+
+    @Test
+    void importImageParsesOptionalCapturedAtFormParam() throws Exception {
+        var file = new MockMultipartFile("image", "shot.png", "image/png", "bytes".getBytes());
+        var summary = new ReceiptSummary(2L, ReceiptStatus.PENDING, ReceiptSource.IMAGE_IMPORT,
+                Instant.parse("2026-09-30T18:30:00Z"), null, BigDecimal.ZERO, "/api/receipts/2/image", null,
+                Instant.now());
+        given(receiptService.uploadImageReceipt(any(), eq(Instant.parse("2026-09-30T18:30:00Z")),
+                eq(ReceiptSource.IMAGE_IMPORT))).willReturn(summary);
+
+        mockMvc.perform(multipart("/api/receipts/image-import").file(file).param("capturedAt", "2026-09-30T18:30:00Z"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.capturedAt").value("2026-09-30T18:30:00Z"));
+    }
+
+    /** ADR-014: each endpoint owns its source; a client-supplied "source" field is never read. */
+    @Test
+    void uploadEndpointsIgnoreAClientSuppliedSource() throws Exception {
+        var file = new MockMultipartFile("image", "r.jpg", "image/jpeg", "bytes".getBytes());
+        var cameraSummary = new ReceiptSummary(1L, ReceiptStatus.PENDING, ReceiptSource.CAMERA, Instant.now(),
+                null, BigDecimal.ZERO, "/api/receipts/1/image", null, Instant.now());
+        var importSummary = new ReceiptSummary(2L, ReceiptStatus.PENDING, ReceiptSource.IMAGE_IMPORT, Instant.now(),
+                null, BigDecimal.ZERO, "/api/receipts/2/image", null, Instant.now());
+        given(receiptService.uploadImageReceipt(any(), any(), eq(ReceiptSource.CAMERA))).willReturn(cameraSummary);
+        given(receiptService.uploadImageReceipt(any(), any(), eq(ReceiptSource.IMAGE_IMPORT)))
+                .willReturn(importSummary);
+
+        mockMvc.perform(multipart("/api/receipts").file(file).param("source", "IMAGE_IMPORT"))
+                .andExpect(status().isCreated());
+        mockMvc.perform(multipart("/api/receipts/image-import").file(file).param("source", "MANUAL"))
+                .andExpect(status().isCreated());
+
+        verify(receiptService).uploadImageReceipt(any(), any(), eq(ReceiptSource.CAMERA));
+        verify(receiptService).uploadImageReceipt(any(), any(), eq(ReceiptSource.IMAGE_IMPORT));
+        verifyNoMoreInteractions(receiptService);
+    }
+
+    @Test
+    void importImageWithoutImagePartReturns400() throws Exception {
+        mockMvc.perform(multipart("/api/receipts/image-import"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.errors[0].code").exists());
+        verifyNoInteractions(receiptService);
+    }
+
+    @Test
+    void importImageWithUnsupportedTypeReturns422() throws Exception {
+        var file = new MockMultipartFile("image", "photo.heic", "image/heic", "bytes".getBytes());
+        given(receiptService.uploadImageReceipt(any(), any(), eq(ReceiptSource.IMAGE_IMPORT)))
+                .willThrow(new UnsupportedImageTypeException("unsupported image content type 'image/heic'"));
+
+        mockMvc.perform(multipart("/api/receipts/image-import").file(file))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.errors[0].code").value("VALIDATION_ERROR"))
+                .andExpect(jsonPath("$.errors[0].field").value("image"));
     }
 
     @Test

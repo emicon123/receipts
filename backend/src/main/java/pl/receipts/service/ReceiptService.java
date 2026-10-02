@@ -24,6 +24,7 @@ import pl.receipts.dto.receipt.StoreNameSuggestionsResponse;
 import pl.receipts.dto.receipt.SubcategoryLabelsResponse;
 import pl.receipts.entity.Receipt;
 import pl.receipts.entity.ReceiptLineItem;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.exception.InvalidQueryParamException;
@@ -58,11 +59,15 @@ public class ReceiptService {
         this.imageStorageService = imageStorageService;
     }
 
+    /**
+     * Shared by both image-backed upload endpoints; the controller picks {@code source} (CAMERA for
+     * POST /receipts, IMAGE_IMPORT for POST /receipts/image-import — never the client).
+     */
     @Transactional
-    public ReceiptSummary uploadCameraReceipt(MultipartFile image, Instant capturedAt) {
+    public ReceiptSummary uploadImageReceipt(MultipartFile image, Instant capturedAt, ReceiptSource source) {
         Instant effectiveCapturedAt = capturedAt != null ? capturedAt : Instant.now();
         StoredImage stored = imageStorageService.store(image, effectiveCapturedAt);
-        Receipt receipt = Receipt.newCameraUpload(stored.relativePath(), effectiveCapturedAt);
+        Receipt receipt = Receipt.newImageUpload(source, stored.relativePath(), effectiveCapturedAt);
         receiptRepository.save(receipt);
         return receiptMapper.toSummary(receipt);
     }
@@ -122,7 +127,7 @@ public class ReceiptService {
     public PendingReceiptsResponse listPending() {
         List<PendingReceiptRef> refs = receiptRepository.findAllByStatusOrderByCapturedAtAsc(ReceiptStatus.PENDING)
                 .stream()
-                .map(r -> new PendingReceiptRef(r.getId()))
+                .map(r -> new PendingReceiptRef(r.getId(), r.getSource()))
                 .toList();
         return new PendingReceiptsResponse(refs);
     }
@@ -160,7 +165,7 @@ public class ReceiptService {
     public LoadedImage getImage(Long id) {
         Receipt receipt = findOrThrow(id);
         if (receipt.getImagePath() == null) {
-            throw new NoSuchElementException("receipt " + id + " has no image (MANUAL entry)");
+            throw new NoSuchElementException("receipt " + id + " has no image");
         }
         return imageStorageService.load(receipt.getImagePath());
     }

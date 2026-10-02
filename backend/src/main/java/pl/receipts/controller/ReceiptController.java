@@ -27,14 +27,15 @@ import pl.receipts.dto.receipt.ReceiptListResponse;
 import pl.receipts.dto.receipt.ReceiptSummaryResponse;
 import pl.receipts.dto.receipt.ReprocessRequest;
 import pl.receipts.dto.receipt.StoreNameSuggestionsResponse;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.service.LineItemCorrectionService;
 import pl.receipts.service.ReceiptService;
 import pl.receipts.storage.LoadedImage;
 
 /**
- * Frontend-facing receipt surface: upload, manual entry, list/detail, image bytes, correction,
- * reprocess, delete. The classify-receipts.sh-specific endpoints (pending list, batch submit)
+ * Frontend-facing receipt surface: camera upload, image import, manual entry, list/detail, image
+ * bytes, correction, reprocess, delete. The classify-receipts.sh-specific endpoints (pending list, batch submit)
  * live in {@link ClassificationController} — see that class's Javadoc for the split rationale.
  */
 @RestController
@@ -53,7 +54,19 @@ public class ReceiptController {
     @PostMapping(consumes = "multipart/form-data")
     public ResponseEntity<ReceiptSummaryResponse> upload(@RequestPart("image") MultipartFile image,
                                                            @RequestParam(required = false) Instant capturedAt) {
-        var summary = receiptService.uploadCameraReceipt(image, capturedAt);
+        var summary = receiptService.uploadImageReceipt(image, capturedAt, ReceiptSource.CAMERA);
+        return ResponseEntity.status(HttpStatus.CREATED).body(new ReceiptSummaryResponse(summary));
+    }
+
+    /**
+     * Same contract as {@link #upload} but for an image the user imported (gallery, file picker,
+     * clipboard) rather than captured live. The source is fixed here — it is never a client input
+     * (ADR-014).
+     */
+    @PostMapping(value = "/image-import", consumes = "multipart/form-data")
+    public ResponseEntity<ReceiptSummaryResponse> importImage(@RequestPart("image") MultipartFile image,
+                                                                @RequestParam(required = false) Instant capturedAt) {
+        var summary = receiptService.uploadImageReceipt(image, capturedAt, ReceiptSource.IMAGE_IMPORT);
         return ResponseEntity.status(HttpStatus.CREATED).body(new ReceiptSummaryResponse(summary));
     }
 

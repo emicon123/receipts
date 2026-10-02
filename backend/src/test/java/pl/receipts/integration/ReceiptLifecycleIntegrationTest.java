@@ -14,6 +14,7 @@ import pl.receipts.dto.classification.ClassificationBatchRequest;
 import pl.receipts.dto.classification.ClassificationLineItemInput;
 import pl.receipts.dto.receipt.LineItemCorrectionRequest;
 import pl.receipts.dto.receipt.ReceiptDetail;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.exception.ReceiptStateConflictException;
@@ -42,7 +43,8 @@ class ReceiptLifecycleIntegrationTest extends AbstractIntegrationTest {
     void uploadThenClassifyThenCorrectThenReprocessPreservesCorrection() throws Exception {
         // 1. Camera upload -> PENDING
         var upload = new MockMultipartFile("image", "receipt.jpg", "image/jpeg", "fake-jpeg-bytes".getBytes());
-        var summary = receiptService.uploadCameraReceipt(upload, Instant.parse("2026-08-15T10:00:00Z"));
+        var summary = receiptService.uploadImageReceipt(upload, Instant.parse("2026-08-15T10:00:00Z"),
+                ReceiptSource.CAMERA);
         assertThat(summary.status()).isEqualTo(ReceiptStatus.PENDING);
         Long id = summary.id();
 

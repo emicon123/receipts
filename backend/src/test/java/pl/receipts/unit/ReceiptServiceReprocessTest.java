@@ -12,6 +12,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import pl.receipts.entity.Receipt;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.exception.InvalidQueryParamException;
 import pl.receipts.exception.ReceiptStateConflictException;
@@ -59,7 +60,7 @@ class ReceiptServiceReprocessTest {
 
     @Test
     void pendingReprocessIsNoOp() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
 
         service.reprocess(1L, false);
@@ -69,7 +70,7 @@ class ReceiptServiceReprocessTest {
 
     @Test
     void processedRequiresForce() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         receipt.setStatus(ReceiptStatus.PROCESSED);
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
 
@@ -80,7 +81,7 @@ class ReceiptServiceReprocessTest {
 
     @Test
     void processedWithForceResets() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         receipt.setStatus(ReceiptStatus.PROCESSED);
         receipt.setProcessedAt(Instant.now());
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
@@ -95,7 +96,7 @@ class ReceiptServiceReprocessTest {
     void stuckProcessingRequiresForce() {
         // Recovery path for a receipt left mid-batch by a backend crash — see
         // docs/architecture/03-receipt-lifecycle.md "Why PROCESSING exists".
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         receipt.setStatus(ReceiptStatus.PROCESSING);
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
 
@@ -113,7 +114,7 @@ class ReceiptServiceReprocessTest {
     }
 
     private Receipt failedReceipt() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         receipt.setStatus(ReceiptStatus.FAILED);
         receipt.setFailureReason("blurry");
         receipt.setProcessedAt(Instant.now());
