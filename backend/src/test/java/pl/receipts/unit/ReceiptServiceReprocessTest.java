@@ -59,6 +59,25 @@ class ReceiptServiceReprocessTest {
     }
 
     @Test
+    void failedImageImportReceiptReprocessesLikeACameraOne() {
+        // Reprocess is source-agnostic (ADR-014): an IMAGE_IMPORT receipt re-enters the pending queue
+        // and keeps its (immutable) source.
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.IMAGE_IMPORT, "2026/09/a.png", Instant.now());
+        receipt.setStatus(ReceiptStatus.FAILED);
+        receipt.setFailureReason("not a purchase");
+        receipt.setProcessedAt(Instant.now());
+        when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
+
+        var summary = service.reprocess(1L, false);
+
+        assertThat(receipt.getStatus()).isEqualTo(ReceiptStatus.PENDING);
+        assertThat(receipt.getFailureReason()).isNull();
+        assertThat(receipt.getProcessedAt()).isNull();
+        assertThat(receipt.getSource()).isEqualTo(ReceiptSource.IMAGE_IMPORT);
+        assertThat(summary.source()).isEqualTo(ReceiptSource.IMAGE_IMPORT);
+    }
+
+    @Test
     void pendingReprocessIsNoOp() {
         Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));

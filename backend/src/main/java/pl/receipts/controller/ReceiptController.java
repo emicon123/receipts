@@ -35,8 +35,9 @@ import pl.receipts.storage.LoadedImage;
 
 /**
  * Frontend-facing receipt surface: camera upload, image import, manual entry, list/detail, image
- * bytes, correction, reprocess, delete. The classify-receipts.sh-specific endpoints (pending list, batch submit)
- * live in {@link ClassificationController} — see that class's Javadoc for the split rationale.
+ * bytes, correction, reprocess, delete. The classify-receipts.sh-specific endpoints (pending list,
+ * batch submit) live in {@link ClassificationController} — see that class's Javadoc for the split
+ * rationale.
  */
 @RestController
 @RequestMapping("/api/receipts")

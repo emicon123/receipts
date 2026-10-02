@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.function.Consumer;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -58,6 +59,17 @@ class ReceiptRepositoryDataJpaTest {
 
     @Autowired
     private TestEntityManager entityManager;
+
+    /**
+     * The database is the JVM-wide singleton shared with the @SpringBootTest classes, which commit
+     * their receipts for good; several tests below assert on exact result sets, so each starts from
+     * an empty table whichever class ran first. The DELETE runs inside the test's own transaction
+     * (rolled back afterwards), so it never removes what other classes committed.
+     */
+    @BeforeEach
+    void startFromAnEmptyReceiptsTable() {
+        entityManager.getEntityManager().createNativeQuery("DELETE FROM receipts").executeUpdate();
+    }
 
     @Test
     void searchFiltersByStatusAndCapturedAtRange() {
@@ -235,6 +247,26 @@ class ReceiptRepositoryDataJpaTest {
 
         assertThat(rows).extracting(pl.receipts.repository.projection.SubcategoryLabelRow::getSubcategory)
                 .containsExactlyInAnyOrder("Słodycze", "Chipsy");
+    }
+
+    /**
+     * The NAMED_ENUM mapping of Receipt.source must read and write the value V3 added to
+     * receipt_source_enum, and an IMAGE_IMPORT receipt is queued like a camera one (ADR-014).
+     */
+    @Test
+    void imageImportReceiptRoundTripsAndIsQueuedAsPendingNextToACameraOne() {
+        entityManager.persist(Receipt.newImageUpload(ReceiptSource.IMAGE_IMPORT, "2026/10/b.png",
+                Instant.parse("2026-10-02T09:00:00Z")));
+        entityManager.persist(Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/10/a.jpg",
+                Instant.parse("2026-10-01T09:00:00Z")));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<Receipt> pending = receiptRepository.findAllByStatusOrderByCapturedAtAsc(ReceiptStatus.PENDING);
+
+        assertThat(pending).extracting(Receipt::getSource)
+                .containsExactly(ReceiptSource.CAMERA, ReceiptSource.IMAGE_IMPORT);
+        assertThat(pending).extracting(Receipt::getImagePath).containsExactly("2026/10/a.jpg", "2026/10/b.png");
     }
 
     @Test
