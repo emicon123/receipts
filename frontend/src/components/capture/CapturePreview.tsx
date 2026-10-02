@@ -8,8 +8,9 @@ interface CapturePreviewProps {
   onAccept: () => void;
 }
 
-/** Client-side preview of a just-captured photo, with the explicit Retake/Accept
- * confirmation step required before anything is uploaded. */
+/** Client-side preview of a just-captured or imported image (camera, gallery, clipboard, drop),
+ * with the explicit Retake/Accept confirmation step required before anything is uploaded. The
+ * image may be a paper-receipt photo or a screenshot, so the alt text stays neutral. */
 export function CapturePreview({
   previewUrl,
   isUploading,
@@ -21,7 +22,7 @@ export function CapturePreview({
       <div className="relative flex-1 overflow-hidden rounded-xl border border-border bg-card">
         <img
           src={previewUrl}
-          alt="Podgląd zrobionego zdjęcia paragonu"
+          alt="Podgląd obrazu paragonu"
           className="size-full object-contain"
         />
       </div>

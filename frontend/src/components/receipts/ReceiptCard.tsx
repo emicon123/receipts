@@ -4,6 +4,7 @@ import { NotebookPen } from "lucide-react";
 import { Link } from "react-router-dom";
 import { StatusBadge } from "@/components/receipts/StatusBadge";
 import { resolveApiUrl } from "@/lib/api";
+import { fallbackReceiptTitle } from "@/lib/receiptLabels";
 import { formatCurrency } from "@/lib/utils";
 import type { ReceiptSummary } from "@/lib/types";
 
@@ -29,7 +30,7 @@ export function ReceiptCard({ receipt }: { receipt: ReceiptSummary }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <p className="truncate text-sm font-medium">
-            {receipt.storeName ?? (receipt.source === "MANUAL" ? "Wpis ręczny" : "Paragon")}
+            {receipt.storeName ?? fallbackReceiptTitle(receipt.source)}
           </p>
         </div>
         <p className="text-xs text-muted-foreground">
