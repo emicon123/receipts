@@ -12,7 +12,9 @@ You can see more in ## Agent orchestration and ## Task workflow below.
 ## What this is
 
 A personal receipt-tracking app. You take a photo of a shopping receipt with your phone
-(a mobile web app, installed to the home screen), the photo uploads immediately, and once a
+(a mobile web app, installed to the home screen), the photo uploads immediately — or you
+import an existing photo/screenshot from the phone gallery (primary on mobile), the clipboard
+or a drop, stored as source `IMAGE_IMPORT` (ADR-014) — and once a
 day the **Claude Code CLI itself** — not an embedded Anthropic SDK call — reads every new
 receipt, itemizes it, assigns each product to one of a fixed set of spending categories, and
 computes totals. Purpose: know exactly how much you spend per month in each category — not
@@ -137,8 +139,10 @@ Anthropic API key). Same shape here, at `infra/classify/`:
    daily at 06:00 and first calls `GET /api/receipts/pending`. **If it's empty, the script exits
    immediately** without invoking `claude` at all — no point spending a CLI invocation on an
    empty queue.
-2. If there are pending receipts, the script downloads each one's image to a temp file, appends
-   an `id → local path` manifest to the static template at `infra/classify/prompt.md`, and runs
+2. If there are pending receipts, the script downloads each one's image to a temp file (the
+   extension follows the response `Content-Type`: jpg/png/webp), appends an
+   `id → local path (+ source=CAMERA|IMAGE_IMPORT)` manifest — `source` is a hint, the prompt
+   has Claude look at the image itself — to the static template at `infra/classify/prompt.md`, and runs
    **one single** `claude -p "<prompt>" --output-format json --allowedTools "Read"` invocation
    covering the *whole* batch — not one invocation per receipt. `--allowedTools "Read"` is
    deliberately narrow: Claude only reads the downloaded images and emits JSON; it never calls
