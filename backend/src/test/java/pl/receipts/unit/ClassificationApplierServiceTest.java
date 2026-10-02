@@ -20,6 +20,7 @@ import pl.receipts.dto.classification.ClassificationBatchItem;
 import pl.receipts.dto.classification.ClassificationLineItemInput;
 import pl.receipts.entity.Receipt;
 import pl.receipts.entity.ReceiptLineItem;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.repository.ReceiptLineItemRepository;
 import pl.receipts.repository.ReceiptRepository;
@@ -49,7 +50,7 @@ class ClassificationApplierServiceTest {
 
     @Test
     void appliesValidItemsRecomputesTotalAndTransitionsToProcessed() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/a.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/a.jpg", Instant.now());
         receipt.setId(1L);
         when(receiptRepository.findById(1L)).thenReturn(Optional.of(receipt));
         when(lineItemRepository.sumAmountByReceiptId(1L)).thenReturn(new BigDecimal("12.50"));
@@ -76,7 +77,7 @@ class ClassificationApplierServiceTest {
 
     @Test
     void invalidCategoryRoutesWholeReceiptToFailedWithoutTouchingLineItems() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/b.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/b.jpg", Instant.now());
         receipt.setId(2L);
         when(receiptRepository.findById(2L)).thenReturn(Optional.of(receipt));
 
@@ -95,7 +96,7 @@ class ClassificationApplierServiceTest {
 
     @Test
     void negativeAmountRoutesWholeReceiptToFailed() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/c.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/c.jpg", Instant.now());
         receipt.setId(3L);
         when(receiptRepository.findById(3L)).thenReturn(Optional.of(receipt));
 
@@ -111,7 +112,7 @@ class ClassificationApplierServiceTest {
     @Test
     void zeroQuantityRoutesToFailed() {
         // Matches the DB CHECK constraint (quantity IS NULL OR quantity > 0) — see V1__init.sql.
-        Receipt receipt = Receipt.newCameraUpload("2026/08/d.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/d.jpg", Instant.now());
         receipt.setId(4L);
         when(receiptRepository.findById(4L)).thenReturn(Optional.of(receipt));
 
@@ -125,7 +126,7 @@ class ClassificationApplierServiceTest {
 
     @Test
     void nullLineItemsRoutesToFailed() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/e.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/e.jpg", Instant.now());
         receipt.setId(5L);
         when(receiptRepository.findById(5L)).thenReturn(Optional.of(receipt));
 
@@ -139,7 +140,7 @@ class ClassificationApplierServiceTest {
 
     @Test
     void applyFailureSetsStatusAndReason() {
-        Receipt receipt = Receipt.newCameraUpload("2026/08/f.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/08/f.jpg", Instant.now());
         receipt.setId(6L);
         when(receiptRepository.findById(6L)).thenReturn(Optional.of(receipt));
 

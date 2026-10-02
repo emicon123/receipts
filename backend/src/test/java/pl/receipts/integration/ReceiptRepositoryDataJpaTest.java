@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.function.Consumer;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.ImportAutoConfiguration;
@@ -19,6 +20,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import pl.receipts.entity.Receipt;
 import pl.receipts.entity.ReceiptLineItem;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.ReceiptStatus;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.repository.ReceiptLineItemRepository;
@@ -58,11 +60,25 @@ class ReceiptRepositoryDataJpaTest {
     @Autowired
     private TestEntityManager entityManager;
 
+    /**
+     * The database is the JVM-wide singleton shared with the @SpringBootTest classes, which commit
+     * their receipts for good; several tests below assert on exact result sets, so each starts from
+     * an empty table whichever class ran first. The DELETE runs inside the test's own transaction
+     * (rolled back afterwards), so it never removes what other classes committed.
+     */
+    @BeforeEach
+    void startFromAnEmptyReceiptsTable() {
+        entityManager.getEntityManager().createNativeQuery("DELETE FROM receipts").executeUpdate();
+    }
+
     @Test
     void searchFiltersByStatusAndCapturedAtRange() {
-        Receipt inRange = Receipt.newCameraUpload("2026/05/a.jpg", Instant.parse("2026-05-15T10:00:00Z"));
-        Receipt outOfRange = Receipt.newCameraUpload("2026/06/a.jpg", Instant.parse("2026-06-15T10:00:00Z"));
-        Receipt wrongStatus = Receipt.newCameraUpload("2026/05/b.jpg", Instant.parse("2026-05-16T10:00:00Z"));
+        Receipt inRange = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/05/a.jpg",
+                Instant.parse("2026-05-15T10:00:00Z"));
+        Receipt outOfRange = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/06/a.jpg",
+                Instant.parse("2026-06-15T10:00:00Z"));
+        Receipt wrongStatus = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/05/b.jpg",
+                Instant.parse("2026-05-16T10:00:00Z"));
         wrongStatus.setStatus(ReceiptStatus.PROCESSED);
         wrongStatus.setProcessedAt(Instant.now());
         entityManager.persist(inRange);
@@ -82,7 +98,7 @@ class ReceiptRepositoryDataJpaTest {
         // Also exercises the bare ":status IS NULL" path itself (no status filter at all) —
         // this is the exact case that used to fail against real Postgres before the String-bind
         // fix (see ReceiptRepository.search's Javadoc).
-        Receipt receipt = Receipt.newCameraUpload("2026/07/z.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/07/z.jpg", Instant.now());
         entityManager.persist(receipt);
         entityManager.flush();
 
@@ -93,7 +109,7 @@ class ReceiptRepositoryDataJpaTest {
 
     @Test
     void deleteUncorrectedByReceiptIdLeavesCorrectedRowsIntact() {
-        Receipt receipt = Receipt.newCameraUpload("2026/05/c.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/05/c.jpg", Instant.now());
         entityManager.persist(receipt);
 
         ReceiptLineItem uncorrected = new ReceiptLineItem("A", SpendCategory.SUPLE, BigDecimal.ONE, null);
@@ -124,7 +140,7 @@ class ReceiptRepositoryDataJpaTest {
      */
     @Test
     void subcategoryAndSubSubcategoryColumnsPersistAndReadBack() {
-        Receipt receipt = Receipt.newCameraUpload("2026/05/sub.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/05/sub.jpg", Instant.now());
         entityManager.persist(receipt);
 
         ReceiptLineItem withSubcategories = new ReceiptLineItem("Żelki", SpendCategory.JEDZENIE_PIERDOLOWATE,
@@ -149,7 +165,8 @@ class ReceiptRepositoryDataJpaTest {
     /** Covers ReceiptLineItemRepository.findForSpendingDrilldown backing GET /spending/line-items. */
     @Test
     void findForSpendingDrilldownScopesToCategoryMonthAndProcessedOnly() {
-        Receipt march = Receipt.newCameraUpload("2026/03/a.jpg", Instant.parse("2026-03-10T09:00:00Z"));
+        Receipt march = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/03/a.jpg",
+                Instant.parse("2026-03-10T09:00:00Z"));
         march.setStatus(ReceiptStatus.PROCESSED);
         march.setStoreName("Biedronka");
         entityManager.persist(march);
@@ -163,7 +180,8 @@ class ReceiptRepositoryDataJpaTest {
         entityManager.persist(marchOtherCategory);
 
         // Same category, wrong month -> excluded.
-        Receipt april = Receipt.newCameraUpload("2026/04/a.jpg", Instant.parse("2026-04-01T09:00:00Z"));
+        Receipt april = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/04/a.jpg",
+                Instant.parse("2026-04-01T09:00:00Z"));
         april.setStatus(ReceiptStatus.PROCESSED);
         entityManager.persist(april);
         ReceiptLineItem aprilAlko = new ReceiptLineItem("Piwo", SpendCategory.ALKO, new BigDecimal("10.00"), null);
@@ -172,7 +190,8 @@ class ReceiptRepositoryDataJpaTest {
 
         // Same category/month, still PENDING -> excluded (only PROCESSED receipts have reliable
         // line items, matching /spending/summary's rule).
-        Receipt marchPending = Receipt.newCameraUpload("2026/03/b.jpg", Instant.parse("2026-03-15T09:00:00Z"));
+        Receipt marchPending = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/03/b.jpg",
+                Instant.parse("2026-03-15T09:00:00Z"));
         entityManager.persist(marchPending);
         ReceiptLineItem pendingAlko = new ReceiptLineItem("Piwo", SpendCategory.ALKO, new BigDecimal("99.00"), null);
         pendingAlko.setReceipt(marchPending);
@@ -191,7 +210,8 @@ class ReceiptRepositoryDataJpaTest {
     /** Covers ReceiptLineItemRepository.findSubcategoryLabelRows backing GET /receipts/subcategory-labels. */
     @Test
     void findSubcategoryLabelRowsExcludesBlankSubcategoryAndIncludesEveryStatus() {
-        Receipt processed = Receipt.newCameraUpload("2026/06/a.jpg", Instant.parse("2026-06-01T10:00:00Z"));
+        Receipt processed = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/06/a.jpg",
+                Instant.parse("2026-06-01T10:00:00Z"));
         processed.setStatus(ReceiptStatus.PROCESSED);
         processed.setProcessedAt(Instant.now());
         entityManager.persist(processed);
@@ -202,7 +222,8 @@ class ReceiptRepositoryDataJpaTest {
 
         // A still-PENDING receipt's label must still count (labels are worth reminding Claude of
         // regardless of the owning receipt's status).
-        Receipt pending = Receipt.newCameraUpload("2026/06/b.jpg", Instant.parse("2026-06-02T10:00:00Z"));
+        Receipt pending = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/06/b.jpg",
+                Instant.parse("2026-06-02T10:00:00Z"));
         entityManager.persist(pending);
         ReceiptLineItem pendingLabel = new ReceiptLineItem("Chipsy", SpendCategory.JEDZENIE_PIERDOLOWATE,
                 new BigDecimal("6.00"), null, "Chipsy", null);
@@ -228,9 +249,29 @@ class ReceiptRepositoryDataJpaTest {
                 .containsExactlyInAnyOrder("Słodycze", "Chipsy");
     }
 
+    /**
+     * The NAMED_ENUM mapping of Receipt.source must read and write the value V3 added to
+     * receipt_source_enum, and an IMAGE_IMPORT receipt is queued like a camera one (ADR-014).
+     */
+    @Test
+    void imageImportReceiptRoundTripsAndIsQueuedAsPendingNextToACameraOne() {
+        entityManager.persist(Receipt.newImageUpload(ReceiptSource.IMAGE_IMPORT, "2026/10/b.png",
+                Instant.parse("2026-10-02T09:00:00Z")));
+        entityManager.persist(Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/10/a.jpg",
+                Instant.parse("2026-10-01T09:00:00Z")));
+        entityManager.flush();
+        entityManager.clear();
+
+        List<Receipt> pending = receiptRepository.findAllByStatusOrderByCapturedAtAsc(ReceiptStatus.PENDING);
+
+        assertThat(pending).extracting(Receipt::getSource)
+                .containsExactly(ReceiptSource.CAMERA, ReceiptSource.IMAGE_IMPORT);
+        assertThat(pending).extracting(Receipt::getImagePath).containsExactly("2026/10/a.jpg", "2026/10/b.png");
+    }
+
     @Test
     void sumAmountByReceiptIdReturnsZeroWhenNoLineItems() {
-        Receipt receipt = Receipt.newCameraUpload("2026/05/d.jpg", Instant.now());
+        Receipt receipt = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/05/d.jpg", Instant.now());
         entityManager.persist(receipt);
         entityManager.flush();
 
@@ -274,7 +315,8 @@ class ReceiptRepositoryDataJpaTest {
         persistReceiptWithStore("Biedronka", Instant.parse("2026-01-20T10:00:00Z"), ReceiptStatus.PENDING, r -> {});
 
         // NULL and blank/whitespace-only store names must never surface.
-        Receipt nullStore = Receipt.newCameraUpload("2026/03/null.jpg", Instant.parse("2026-03-01T10:00:00Z"));
+        Receipt nullStore = Receipt.newImageUpload(ReceiptSource.CAMERA, "2026/03/null.jpg",
+                Instant.parse("2026-03-01T10:00:00Z"));
         entityManager.persist(nullStore);
         Receipt blankStore = Receipt.newManualEntry(Instant.parse("2026-03-02T10:00:00Z"), "   ");
         entityManager.persist(blankStore);

@@ -19,6 +19,7 @@ import pl.receipts.dto.receipt.PendingReceiptRef;
 import pl.receipts.dto.receipt.PendingReceiptsResponse;
 import pl.receipts.dto.receipt.SubcategoryLabelGroup;
 import pl.receipts.dto.receipt.SubcategoryLabelsResponse;
+import pl.receipts.entity.ReceiptSource;
 import pl.receipts.entity.SpendCategory;
 import pl.receipts.service.ClassificationBatchService;
 import pl.receipts.service.ReceiptService;
@@ -36,13 +37,20 @@ class ClassificationControllerWebMvcTest {
     private ClassificationBatchService classificationBatchService;
 
     @Test
-    void pendingReturnsLeanIdList() throws Exception {
-        given(receiptService.listPending())
-                .willReturn(new PendingReceiptsResponse(java.util.List.of(new PendingReceiptRef(1L))));
+    void pendingReturnsLeanIdAndSourceList() throws Exception {
+        given(receiptService.listPending()).willReturn(new PendingReceiptsResponse(java.util.List.of(
+                new PendingReceiptRef(1L, ReceiptSource.CAMERA),
+                new PendingReceiptRef(2L, ReceiptSource.IMAGE_IMPORT))));
 
         mockMvc.perform(get("/api/receipts/pending"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[0].id").value(1));
+                .andExpect(jsonPath("$.data.length()").value(2))
+                .andExpect(jsonPath("$.data[0].id").value(1))
+                .andExpect(jsonPath("$.data[0].source").value("CAMERA"))
+                .andExpect(jsonPath("$.data[1].id").value(2))
+                .andExpect(jsonPath("$.data[1].source").value("IMAGE_IMPORT"))
+                // lean by design (ADR-014): nothing but id + source per entry
+                .andExpect(jsonPath("$.data[1].length()").value(2));
     }
 
     @Test
