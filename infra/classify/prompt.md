@@ -15,14 +15,21 @@ below, covering every id you were given.
 
 ---
 
-You are analyzing two kinds of spending records for a personal spending tracker: photographed
-shopping receipts, and bank-transaction summaries (no photo). The manifest at the end of this
-prompt lists both kinds together; **tell them apart by which fields each entry has**, not by
-position — an entry with a `path=` field is a photo receipt (read the image); an entry with
-`counterparty=`/`title=`/`amount=`/`date=` fields instead is a bank transaction (no file to read,
-classify from those fields directly). A manifest with no bank-transaction entries at all — every
-line has only `id=`/`path=` — is classified exactly as before this section was added: read every
-image, always guess a category, never use `uncertainCategory`.
+You are analyzing two kinds of spending records for a personal spending tracker: **images** — a
+photographed paper shopping receipt, or a screenshot of a digital receipt/order — and
+bank-transaction summaries (no image). The manifest at the end of this prompt lists them together;
+**tell them apart by which fields each entry has**, not by position — an entry with a `path=`
+field is an image to read; an entry with `counterparty=`/`title=`/`amount=`/`date=` fields instead
+is a bank transaction (no file to read, classify from those fields directly).
+
+For an image entry, its **`source=` field says what kind of image it is**: `source=CAMERA` is a
+photographed paper receipt (the "Photo receipts" rules below), `source=SCREENSHOT` is a screenshot
+of a digital receipt/order (the "Photo receipts" rules **plus** the "Screenshots" section, which
+takes precedence wherever it differs). An image entry with no `source=` field at all (an older
+manifest format) is a photographed paper receipt. A manifest with no screenshot and no
+bank-transaction entries — every line has only `id=`/`path=` (optionally `source=CAMERA`) — is
+classified exactly as before those sections were added: read every image, always guess a
+category, never use `uncertainCategory`.
 
 ## Photo receipts
 
@@ -195,6 +202,69 @@ receipt), report it as a failure instead of line items — see output format bel
 must end up with line items (in `items`) or a failure (in `failures`) — never in the
 `uncertainCategory` array described below, which is reserved for bank transactions only.
 
+## Screenshots
+
+An entry with `source=SCREENSHOT` is a screenshot of a **digital** purchase record that the user
+pasted or picked from their phone/computer — typically a store-app e-receipt (Żabka/Żappka,
+Biedronka, Lidl Plus…), an online-order summary (Allegro, Glovo, Wolt, Pyszne.pl…), a bank-app,
+BLIK or card-payment confirmation, or a capture of a PDF/webpage invoice. It is not a printed
+paragon, so a few rules differ. **Everything else in this prompt applies unchanged** — read the
+image with `Read` at its `path=`, the same fields to extract (`storeName`, `capturedAt`, `total`,
+line items), the same `amount`-is-the-line-total rule, the same 11 categories and known product
+rules (e.g. non-alcoholic beer is still not `ALKO`), the same `subcategory`/`subSubcategory`
+labels and known-labels list, the same line-total self-check, and the same output format. Where
+this prompt says "photo receipt" for the self-check, `total`, the always-guess rule, or
+`uncertainCategory`, a screenshot entry counts as one.
+
+- **No VAT letters.** A screenshot has no printed VAT rate per line, so the VAT cross-check
+  described above is **unavailable** — do not look for it or invent one. Decide from the product
+  name, brand, size/unit, and the context the app gives you (a restaurant order from Glovo/Wolt is
+  `ROZRYWKA_RESTAURACJE`; a grocery-app basket is judged per product, food-tier by nutritional
+  quality, as usual).
+- **Amount formats.** Amounts appear as `12,99 zł`, `12,99 PLN`, `PLN 12.99`, `12.99`, or
+  `1 299,00 zł` (a space as thousands separator). Emit every amount as a plain JSON number with a
+  dot decimal and no currency (`12.99`, `1299.00`). If the screenshot is in a currency other than
+  PLN and shows no PLN amount, do not convert — report it in `failures`.
+- **Fees and tips are line items.** Delivery, service, packaging and bag fees, and tips
+  ("Dostawa", "Opłata serwisowa", "Opakowanie", "Napiwek") each get their own line item with their
+  own amount, so the lines add up to what was charged. Give each the category of the order it
+  belongs to (if the order spans categories, that of its largest-value items). A fee that a
+  discount cancels completely is omitted — never emit a zero-amount line.
+- **Discounts and coupons never become negative lines.** A negative `amount` is rejected
+  downstream, so never emit one. Apply a discount to the line it targets (a product coupon lowers
+  that product's `amount` to what was actually paid for it; a free-delivery discount lowers the fee
+  line). A discount with no target ("Kod rabatowy −10,00 zł", a basket-wide Lidl Plus/Żappka
+  coupon) is spread proportionally across all lines — or, if that is awkward, taken off the largest
+  line — never below `0.00` for a line. The goal is that the line amounts add up to the amount
+  actually charged. `total` is that charged figure ("Do zapłaty", "Razem", "Zapłacono"), not a
+  pre-discount subtotal.
+- **Ignore UI chrome.** Status bar (clock, battery, signal), navigation/tab bars, app headers,
+  buttons ("Zamów ponownie", "Wróć"), order-status timelines ("Dostarczono"), banners, ads,
+  "you might also like" product suggestions, and loyalty-points/cashback balances are not purchased
+  items — never itemize them. Read only the purchase content.
+- **Store and date.** `storeName` is the merchant (the shop or restaurant), not the app it was
+  ordered through, unless only the platform is shown. `capturedAt` is the order/transaction date
+  **only if an absolute date is shown**; a relative one ("Dzisiaj", "Wczoraj") or no date means
+  omit `capturedAt` — never derive a date from today's.
+- **Payment confirmations with no itemization.** A bank-app/BLIK/card confirmation often shows only
+  a merchant (or transfer title) and one amount. There are no lines to read: emit **one** line item
+  — `productName` is what the screen calls it (merchant or title), `amount` the paid amount — and
+  judge its category from the merchant/title the way you would a single line item. Unlike a bank
+  transaction in the section below, **do not** use `uncertainCategory` here: always pick the
+  closest category, a human reviews it afterward.
+- **Partial or scrolled captures.** A screenshot may show only part of an order (cropped, or
+  scrolled so some lines are out of frame). Itemize exactly what is visible and **never invent a
+  line you cannot see**. If the visible lines are clearly not the whole order (the rest is out of
+  frame), omit `total`, so the check against it does not report a false mismatch.
+- **Not a purchase → `failures`.** A chat, a meme, a settings or home screen, a product page, a
+  shopping cart/wishlist, an ad, a price comparison, an order shown as cancelled/refunded, or
+  anything else that is not a completed purchase record is not a receipt: report it in `failures`
+  with a short reason (e.g. `"screenshot does not show a purchase"`). Likewise if it is a purchase
+  record but genuinely unreadable (too small, blurred, mostly cut off).
+- **Always guess, never hedge — exactly as for photos.** A screenshot id ends up in `items` or
+  `failures` and **never** in `uncertainCategory`. Every category must be one of the 11 fixed
+  values; a human reviews and can correct every line item afterward.
+
 ## Bank transactions
 
 Each entry with `counterparty=`/`title=`/`amount=`/`date=` fields (instead of `path=`) is a
@@ -296,8 +366,8 @@ exactly with the sum of `lineItems[].amount`, per the self-check above.
 
 Every id listed below must appear in **exactly one** of `items`, `uncertainCategory`, or
 `failures` — never in more than one, never omitted. `uncertainCategory` must contain **only**
-bank-transaction ids (entries with `counterparty=`/`amount=` fields) — a photo-receipt id
-(`path=` field) never belongs there.
+bank-transaction ids (entries with `counterparty=`/`amount=` fields) — a photo-receipt or
+screenshot id (any entry with a `path=` field, whatever its `source=`) never belongs there.
 
 `total` (shown on receipt 42 above) is optional and applies only to photo-receipt entries that had
 a legible printed grand total — omit it if illegible, and never include it for a bank-transaction
@@ -306,13 +376,17 @@ construction, so there's nothing separate to reconcile it against.
 
 ## Receipts to classify
 
-Appended below by classify-receipts.sh, one line per pending receipt — remember, tell a photo
+Appended below by classify-receipts.sh, one line per pending receipt — remember, tell an image
 entry from a bank-transaction entry by its fields (`path=` vs.
-`counterparty=`/`title=`/`amount=`/`date=`), not by any section heading. Example of what the
-appended manifest looks like once the bank-import sync exists (design-only, ADR-007 — not built
-yet; today the appended manifest only ever contains `path=` entries):
+`counterparty=`/`title=`/`amount=`/`date=`), not by any section heading, and tell a photographed
+paper receipt from a screenshot by an image entry's `source=` field (`CAMERA` or `SCREENSHOT`; see
+"Screenshots" above). The file extension of `path=` (`.jpg`, `.png`, `.webp`) is just the image's
+real format and carries no meaning for classification. Example of what the appended manifest looks
+like once the bank-import sync exists (design-only, ADR-007 — not built yet; today the appended
+manifest only ever contains `path=` entries, each with a `source=`):
 
 ```
-- id=42 path=/tmp/classify-receipts/receipt-42.jpg
+- id=42 path=/tmp/classify-receipts/receipt-42.jpg source=CAMERA
+- id=44 path=/tmp/classify-receipts/receipt-44.png source=SCREENSHOT
 - id=57 counterparty="Żabka Polska" title="ZAKUP PRZY UZYCIU KARTY" amount=23.40 date=2026-08-30
 ```
