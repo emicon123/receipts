@@ -245,16 +245,13 @@ docker logs -f receipts-backend-1                                               
 
 This app is not reached directly by end users — the canonical URL is
 `http://<tailscale-hostname>/paragony/`, proxied by **investing-app's** nginx (a *different*
-repo/compose project), the same way it already fronts sibling apps at `/sibling-a/` and `/sibling-b/`,
-and a host-process app at `/ticket/`. Receipts is architecturally like the `/ticket/` case (a
-separately-deployed app, not a service inside investing-app's own compose network) rather than
-the `/sibling-a/`/`/sibling-b/` case (those are nested sibling services on investing-app's own network,
-reached by container name) — so the routing goes through `host.docker.internal`, reaching
-receipts' own already-published nginx on port 8090 (see `infra/compose.yml`'s `NGINX_PORT`),
-which then does its normal internal `/api/` proxy to the receipts backend unchanged. One
-location block on investing-app's side handles both static assets and `/api/` calls — no need
-for a split `/paragony/api/` block the way `/sibling-a/api/` and `/sibling-b/api/` have one, since
-receipts' own nginx already does that split internally once the prefix is stripped.
+repo/compose project), the same way it fronts the host-process app at `/ticket/`. Receipts is a
+separately-deployed app, not a service inside investing-app's own compose network, so the
+routing goes through `host.docker.internal`, reaching receipts' own already-published nginx on
+port 8090 (see `infra/compose.yml`'s `NGINX_PORT`), which then does its normal internal `/api/`
+proxy to the receipts backend unchanged. One location block on investing-app's side handles both
+static assets and `/api/` calls — no split `/paragony/api/` block is needed, since receipts' own
+nginx already does that split internally once the prefix is stripped.
 
 **This creates two real, load-bearing consequences, both already applied:**
 1. **`frontend/vite.config.ts`'s `base` is hardcoded to `/paragony/`** for production builds
